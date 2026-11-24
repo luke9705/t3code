@@ -1,7 +1,7 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { UnifiedSettings } from "@t3tools/contracts";
-import { useMessages } from "gt-react";
-import type { Dispatch } from "react";
+import { msg, useMessages } from "gt-react";
+import { useRef, type Dispatch, type SetStateAction } from "react";
 import type { ComposerThreadTarget, DraftSessionState } from "../../composerDraftStore";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
@@ -15,8 +15,9 @@ import {
 } from "@t3tools/contracts";
 import type { deriveThreadStructureRuntime } from "@t3tools/client-runtime/state/thread-execution";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { type SetStateAction } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import { resolveAppModelSelectionForInstance } from "../../modelSelection";
 import {
@@ -95,6 +96,24 @@ export function useComposerSelection(input: ComposerSelectionInput) {
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const applyThreadModelPick = useApplyThreadModelPick();
+  const probeLocalInference = useAtomCommand(serverEnvironment.probeLocalInference, {
+    reportFailure: false,
+  });
+  const latestModelPick = useRef(0);
+  const showOmlxPrompt = useStableCallback((pick: number, targetKey: string) => {
+    if (pick !== latestModelPick.current || targetKey !== composerTargetKey(composerDraftTarget)) {
+      return;
+    }
+    toastManager.add({
+      type: "warning",
+      title: messages(msg("oMLX is not running")),
+      description: messages(
+        msg(
+          "To use this local model, open oMLX and start its server on port 8080 in this environment before sending a message.",
+        ),
+      ),
+    });
+  });
 
   const handleRuntimeModeChange = (mode: RuntimeMode) => {
     if (mode === runtimeMode) return;
@@ -138,7 +157,9 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     options?: { focusComposer?: boolean },
   ) => {
     if (!activeThread) return;
-    cancelHeldComposerSend(composerTargetKey(composerDraftTarget));
+    const pick = ++latestModelPick.current;
+    const targetKey = composerTargetKey(composerDraftTarget);
+    cancelHeldComposerSend(targetKey);
     const entry = providerStatuses.find((snapshot) => snapshot.instanceId === instanceId);
     const resolvedDriverKind = entry?.driver ?? null;
     if (
@@ -175,6 +196,16 @@ export function useComposerSelection(input: ComposerSelectionInput) {
       model,
       { preserveUnavailableSelection: true },
     );
+    const checkOmlx = () => {
+      if (entry?.driver !== "pi" || !resolvedModel?.startsWith("omlx/")) return;
+      void probeLocalInference({ environmentId, input: { localInference: "omlx" } }).then(
+        (result) => {
+          if (result._tag === "Success" && result.value.omlxRunning === false) {
+            showOmlxPrompt(pick, targetKey);
+          }
+        },
+      );
+    };
     const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
     const storedDraft = useComposerDraftStore.getState().getComposerDraft(threadRef);
     const draft = draftModelSelectionApplies(storedDraft, threadHasStarted(activeThread))
@@ -194,6 +225,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     ) {
       // Re-picking the shown model keeps its options and saves it again if that save failed.
       if (resolvedModel && !isLocalDraftThread) applyThreadModelPick(threadRef);
+      checkOmlx();
       if (options?.focusComposer !== false) scheduleComposerFocus();
       return;
     }
@@ -239,6 +271,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     });
     setStickyComposerModelSelection(nextModelSelection);
     if (!isLocalDraftThread) applyThreadModelPick(threadRef);
+    checkOmlx();
     if (options?.focusComposer !== false) scheduleComposerFocus();
   };
   const onProviderModelSelectStable = useStableCallback(onProviderModelSelect);

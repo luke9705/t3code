@@ -25,6 +25,12 @@ it("maps current Pi skill metadata to T3's user and project skill scopes", () =>
           },
         },
         { name: "hello", description: "Say hello.", source: "extension" },
+        { name: "track-journal", source: "extension" },
+        { name: "move", source: "extension" },
+        { name: "t3-track-journal", source: "extension" },
+        { name: "t3-stop-delegate", source: "extension" },
+        { name: "t3-service-tier", source: "extension" },
+        { name: "review", description: "Review template.", source: "prompt" },
       ],
     }),
   ).toEqual({
@@ -44,6 +50,15 @@ it("maps current Pi skill metadata to T3's user and project skill scopes", () =>
         enabled: true,
       },
     ],
-    slashCommands: [{ name: "hello", description: "Say hello." }],
+    slashCommands: [
+      { name: "hello", description: "Say hello." },
+      { name: "track-journal" },
+      {
+        name: "move",
+        description: "Move this Pi conversation to another registered T3 project",
+        input: { hint: "Destination project directory" },
+      },
+      { name: "review", description: "Review template.", inline: true },
+    ],
   });
 });

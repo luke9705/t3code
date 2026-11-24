@@ -46,12 +46,69 @@ async function loadHooks(
     stripFrontmatter: (content: string) => content,
     pi: {
       on: (name: string, handler: unknown) => handlers.set(name, handler),
+      events: { on: () => {}, emit: () => {} },
       registerCommand: () => {},
       getCommands: () => commands,
     },
   });
   return handlers;
 }
+
+describe("Pi personal question UI", () => {
+  it.each([
+    { choice: 0, answer: "Plain text", text: "User selected: 1. Plain text" },
+    { choice: 2, answer: "HTML", text: "User wrote: HTML" },
+    { choice: undefined, answer: null, text: "User cancelled the selection" },
+  ])("returns the result for choice $choice", async ({ choice, answer, text }) => {
+    const hook = (await loadHooks()).get("tool_result") as (
+      event: unknown,
+      ctx: unknown,
+    ) => Promise<unknown>;
+    const dialogs: string[] = [];
+    const result = await hook(
+      {
+        toolName: "question",
+        input: {
+          question: "Which format?",
+          options: [{ label: "Plain text", description: "No formatting" }, { label: "Markdown" }],
+        },
+        content: [
+          { type: "text", text: "Error: UI not available (running in non-interactive mode)" },
+        ],
+      },
+      {
+        mode: "rpc",
+        ui: {
+          select: async (title: string, options: string[]) => {
+            dialogs.push("select");
+            assert.equal(title, "Which format?");
+            assert.deepEqual(options, [
+              "1. Plain text — No formatting",
+              "2. Markdown — ",
+              "Type something.",
+            ]);
+            return choice === undefined ? undefined : options[choice];
+          },
+          input: async () => {
+            dialogs.push("input");
+            return "HTML";
+          },
+        },
+      },
+    );
+    assert.deepEqual(result, {
+      content: [{ type: "text", text }],
+      details: {
+        question: "Which format?",
+        options: ["Plain text", "Markdown"],
+        answer,
+        ...(answer === null ? {} : { wasCustom: choice === 2 }),
+      },
+      isError: false,
+    });
+    assert.deepEqual(dialogs, choice === 2 ? ["select", "input"] : ["select"]);
+  });
+});
 
 describe("Pi orchestration prompt section", () => {
   it.each([
@@ -477,6 +534,7 @@ describe("Pi tool discovery permissions", () => {
     await NodeVM.runInNewContext(`${source}\nt3McpExtension(pi)`, {
       process: { env: { T3_PI_RUNTIME_MODE: "approval-required" } },
       pi: {
+        events: { on: () => {}, emit: () => {} },
         on: (name: string, handler: ToolCallHook) => {
           if (name === "tool_call") toolCall = handler;
         },
@@ -554,6 +612,7 @@ async function loadRequestHook() {
     process: { env: {} },
     pi: {
       on: (name: string, handler: RequestHook) => handlers.set(name, handler),
+      events: { on: () => {}, emit: () => {} },
       registerCommand: (name: string, options: { handler: CommandHandler }) =>
         commands.set(name, options.handler),
     },

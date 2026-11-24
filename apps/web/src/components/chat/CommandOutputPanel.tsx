@@ -12,6 +12,30 @@ import { useInitialOutputReady, type TurnItemSource } from "./timelineRowContext
 
 const FOLLOW_SLACK_PX = 8;
 
+export function PiCompactCommandOutput({ text }: { readonly text: string }) {
+  const prefix = text.slice(0, 1024).split("\n", 3).slice(0, 2).join("\n").trimEnd();
+  const { resolvedTheme } = useTheme();
+  if (!prefix) return null;
+  const spans = terminalOutputSpans(prefix, TERMINAL_PALETTES[resolvedTheme]);
+  return (
+    <pre
+      data-pi-shell-preview
+      className="line-clamp-2 overflow-hidden whitespace-pre-wrap break-words text-muted-foreground"
+    >
+      {spans.map((span, index) =>
+        span.style === null ? (
+          span.text
+        ) : (
+          // oxlint-disable-next-line react/no-array-index-key -- spans are regenerated in the parser's order
+          <span key={index} style={span.style}>
+            {span.text}
+          </span>
+        ),
+      )}
+    </pre>
+  );
+}
+
 export function useCommandOutputStreaming(environmentId: EnvironmentId): boolean {
   return (
     useServerConfigs().get(environmentId)?.environment.capabilities.commandOutputStreaming === true
@@ -30,6 +54,7 @@ export function CommandOutputPanel(props: {
   readonly threadId: ThreadId;
   readonly itemId: TurnItemId;
   readonly source?: TurnItemSource["commandOutput"] | undefined;
+  readonly compact?: boolean;
 }) {
   const input = { threadId: props.threadId, itemId: props.itemId };
   const { data, error } = useEnvironmentQuery<CommandOutputView, unknown>(
@@ -48,6 +73,8 @@ export function CommandOutputPanel(props: {
     const element = scrollRef.current;
     if (element && followRef.current) element.scrollTop = element.scrollHeight;
   });
+
+  if (props.compact) return <PiCompactCommandOutput text={text} />;
 
   if (text.length === 0) {
     if (error) {

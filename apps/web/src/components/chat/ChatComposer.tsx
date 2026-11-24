@@ -468,6 +468,12 @@ export interface ChatComposerProps {
   onRestoreEditingQueuedAttachment?: ((attachment: ContractChatAttachment) => void) | undefined;
 
   onCompactContext: () => void;
+  onPiContextInspect?: (() => void) | undefined;
+  onPiColors?: (() => void) | undefined;
+  onPiModeToggle?: (() => void) | undefined;
+  onPiRecallQueued?: ((repeat: boolean) => boolean) | undefined;
+  onPiRedirectQueued?: ((repeat: boolean) => boolean) | undefined;
+  onPiInspectShells?: (() => void) | undefined;
   onSend: (
     e?: { preventDefault: () => void },
     dispatchMode?: ComposerDispatchMode,
@@ -653,6 +659,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const applyThreadModelPick = useApplyThreadModelPick();
   const composerDraft = useComposerThreadDraft(composerDraftTarget);
   const composerDraftTargetKeyRef = useRef("");
+  const piPromptStash = useRef<{ key: string; text: string } | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes the committed draft target key to a ref read by async handlers
   useLayoutEffect(() => {
     composerDraftTargetKeyRef.current = composerDraftTargetKey;
@@ -2398,6 +2405,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       onResume();
       return true;
     }
+    const localPiCommand = promptRef.current.trim();
+    const localPiAction =
+      localPiCommand === "/context-inspect"
+        ? props.onPiContextInspect
+        : localPiCommand === "/color"
+          ? props.onPiColors
+          : undefined;
+    if (localPiAction && !activePendingProgress && !activePendingApproval) {
+      event?.preventDefault();
+      applyPromptReplacement(0, promptRef.current.length, "", {
+        expectedText: promptRef.current,
+        focusEditorAfterReplace: false,
+      });
+      localPiAction();
+      return true;
+    }
     const submission = submitComposerDraft({
       prompt: promptRef.current,
       submissionTarget,
@@ -2559,11 +2582,118 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? promptSuggestion
       : null;
 
+  const handlePiPromptStash = (event: KeyboardEvent): boolean => {
+    const save = event.ctrlKey && !event.altKey;
+    const restore = event.altKey && !event.ctrlKey;
+    if (
+      selectedProvider !== "pi" ||
+      event.code !== "KeyS" ||
+      (!save && !restore) ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.isComposing ||
+      activePendingApproval ||
+      activePendingProgress ||
+      pendingUserInputs.length > 0 ||
+      isEditingQueuedMessage ||
+      composerMenuOpen ||
+      composerSendHeld ||
+      projectSelectionRequired ||
+      composerImagesRef.current.length > 0 ||
+      composerFilesRef.current.length > 0 ||
+      composerDraft.persistedAttachments.length > 0 ||
+      composerDraft.replyTo ||
+      composerThreadContexts.length ||
+      composerEnvironmentContexts.length ||
+      composerPreviewAnnotations.length ||
+      composerReviewComments.length ||
+      composerTerminalContexts.length
+    )
+      return false;
+    const current = promptRef.current;
+    const stored = piPromptStash.current;
+    if (save) {
+      if (
+        !event.repeat &&
+        current.length > 0 &&
+        applyPromptReplacement(0, current.length, "", { expectedText: current })
+      ) {
+        piPromptStash.current = { key: composerDraftTargetKey, text: current };
+      }
+    } else if (
+      !event.repeat &&
+      stored?.key === composerDraftTargetKey &&
+      applyPromptReplacement(0, current.length, stored.text, { expectedText: current })
+    ) {
+      piPromptStash.current = null;
+    }
+    return true;
+  };
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem?: boolean) => {
+    if (handlePiPromptStash(event)) return true;
+    if (
+      key === "Tab" &&
+      event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.isComposing &&
+      !event.repeat &&
+      !composerSuggestionListVisible &&
+      !isLiteralPendingAnswer &&
+      !isTaskItem &&
+      promptRef.current.length === 0 &&
+      props.onPiModeToggle
+    ) {
+      props.onPiModeToggle();
+      return true;
+    }
+    if (
+      key === "ArrowUp" &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.isComposing &&
+      !composerSuggestionListVisible &&
+      !isLiteralPendingAnswer &&
+      promptRef.current.length === 0 &&
+      props.onPiRecallQueued?.(event.repeat)
+    )
+      return true;
+    if (
+      key === "ArrowDown" &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.isComposing &&
+      !event.repeat &&
+      !composerSuggestionListVisible &&
+      !isLiteralPendingAnswer &&
+      !activePendingProgress &&
+      !activePendingApproval &&
+      promptRef.current.length === 0 &&
+      props.onPiInspectShells
+    ) {
+      props.onPiInspectShells();
+      return true;
+    }
     if (key === "Escape" && composerSendHeld && !event.isComposing) {
       cancelHeldSend();
       return true;
     }
+    if (
+      key === "Escape" &&
+      !event.isComposing &&
+      !composerMenuOpen &&
+      !activePendingProgress &&
+      !activePendingApproval &&
+      pendingUserInputs.length === 0 &&
+      !isEditingQueuedMessage &&
+      props.onPiRedirectQueued?.(event.repeat)
+    )
+      return true;
     return composerCommandKeyHandler({
       keybindings,
       getShortcutContext,
@@ -2641,6 +2771,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setComposerTrigger,
     importContextRecords,
     expandMobileComposer: expandMobileComposerStable,
+    onNativeStashShortcut: handlePiPromptStash,
   });
   const hasBlockingComposerTopDrawer = pendingUserInputs.length > 0;
   const composerControlsCollapsed = isComposerCollapsedMobile;

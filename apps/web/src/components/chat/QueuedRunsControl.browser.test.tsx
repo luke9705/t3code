@@ -16,7 +16,7 @@ import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { AsyncResult, type Atom, AtomRegistry } from "effect/reactivity";
-import { Profiler, useState, type ComponentProps } from "react";
+import { createRef, Profiler, useState, type ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
@@ -24,6 +24,7 @@ const state = vi.hoisted(() => ({
   threadState: null as unknown as Atom.Writable<AsyncResult.AsyncResult<EnvironmentThreadState>>,
   workflow: null as unknown,
   commandResult: undefined as unknown,
+  send: vi.fn(),
 }));
 
 vi.mock(import("@t3tools/client-runtime/state/thread-workflows"), async (importOriginal) => ({
@@ -74,7 +75,10 @@ vi.mock(import("../../state/threads"), async (importOriginal) => {
 
 vi.mock(import("../../state/use-atom-command"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useAtomCommand: (() => async () => state.commandResult) as never,
+  useAtomCommand: (() => async (input: unknown) => {
+    state.send(input);
+    return state.commandResult;
+  }) as never,
 }));
 
 vi.mock(import("../../assets/assetUrls"), async (importOriginal) => ({
@@ -89,13 +93,14 @@ import { EMPTY_ENVIRONMENT_THREAD_STATE } from "@t3tools/client-runtime/state/th
 import { act, render as renderUi } from "../../../test/render";
 import { makeStreamingTimelineFixture, makeThreadProjectionFixture } from "../../test-fixtures";
 import { ToastProvider } from "../ui/toast";
-import { QueuedRunsControl } from "./QueuedRunsControl";
+import { QueuedRunsControl, type QueuedRunsControlHandle } from "./QueuedRunsControl";
 import { ExpandedImageDialog } from "./ExpandedImageDialog";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 
 function setup() {
   state.workflow = null;
   state.commandResult = undefined;
+  state.send.mockClear();
 }
 
 const baseProps = {
@@ -114,6 +119,41 @@ const baseProps = {
 async function renderQueue(props: Partial<ComponentProps<typeof QueuedRunsControl>> = {}) {
   return renderUi(<QueuedRunsControl {...baseProps} {...props} />);
 }
+
+it("redirects the running Pi turn with the first queued prompt once", async () => {
+  setup();
+  const ref = createRef<QueuedRunsControlHandle>();
+  state.workflow = {
+    activeRun: { id: "run:active", status: "running" },
+    canPromoteToSteer: true,
+    queuedRuns: [
+      {
+        run: { id: "run:queued", userMessageId: "message:queued" },
+        text: "Use another file",
+        attachments: [],
+        message: {
+          text: "Use another file",
+          attachments: [],
+          createdAt: DateTime.makeUnsafe("2026-10-27T12:00:00.000Z"),
+        },
+      },
+    ],
+  };
+  await using _screen = await renderQueue({ ref });
+  await act(async () => {
+    expect(ref.current?.redirectNext(false)).toBe(true);
+    expect(ref.current?.redirectNext(true)).toBe(true);
+  });
+  expect(state.send).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "environment:test",
+    input: {
+      threadId: "thread:test",
+      queuedRunId: "run:queued",
+      targetRunId: "run:active",
+      redirect: true,
+    },
+  });
+});
 
 it.each([false, true])(
   "opens queued images in the existing gallery, pending=%s",

@@ -25,6 +25,8 @@ import { useTheme } from "../../hooks/useTheme";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { Button } from "../ui/button";
+import { PiColorsDialog, usePiColors } from "../chat/PiColorsDialog";
 import { ThemeLibrary } from "./ThemeSettings";
 import {
   SettingResetButton,
@@ -101,6 +103,8 @@ export function AppearanceSettingsPanel() {
   const m = useMessages();
   const customThemes = useCustomThemes();
   const [isImportThemeOpen, setIsImportThemeOpen] = useState(false);
+  const [isPiColorsOpen, setIsPiColorsOpen] = useState(false);
+  const [piColors, setPiColors] = usePiColors();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const environmentStageLabel = useEnvironmentStageLabel();
@@ -168,6 +172,23 @@ export function AppearanceSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection id="appearance-interface" title={gt("Interface")}>
+        <SettingsRow
+          title={gt("Pi colors")}
+          description={gt("Set the Build, Plan, and accent colors for Pi chats.")}
+          devicePreference
+          control={
+            <Button size="sm" variant="outline" onClick={() => setIsPiColorsOpen(true)}>
+              {gt("Edit Pi colors")}
+            </Button>
+          }
+        />
+        {isPiColorsOpen && (
+          <PiColorsDialog
+            colors={piColors}
+            onSave={setPiColors}
+            onClose={() => setIsPiColorsOpen(false)}
+          />
+        )}
         <SettingsRow
           {...searchableSetting("setting-appearance-contrast")}
           description={gt("Adjust the contrast of colors and borders across the interface.")}

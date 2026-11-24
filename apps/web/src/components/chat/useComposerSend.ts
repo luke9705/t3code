@@ -946,6 +946,53 @@ export function useComposerSend(input: ComposerSendInput) {
       composerThreadContexts.length === 0 &&
       composerEnvironmentContexts.length === 0 &&
       replyTo === null;
+    if (ctxSelectedProvider === "pi" && /^\/move(?:\s|$)/.test(trimmed)) {
+      if (!isServerThread || !activeThread.activeProviderThreadId) {
+        setThreadError(activeThread.id, m(msg("Open a saved Pi conversation before moving it.")));
+        return;
+      }
+      if (!composerHoldsOnlyText || multipleModelSelections !== null) {
+        setThreadError(activeThread.id, m(msg("Send /move without attachments or other context.")));
+        return;
+      }
+      // Relocation isn't a turn: don't decline approvals, clear a fresh-session arm,
+      // or add an optimistic message. Only clear the draft on success.
+      sendInFlightRef.current = true;
+      setThreadError(activeThread.id, null);
+      const result = await startThreadTurn({
+        environmentId,
+        input: {
+          threadId: activeThread.id,
+          message: { messageId: newMessageId(), role: "user", text: trimmed, attachments: [] },
+          modelSelection: ctxSelectedModelSelection,
+          runtimeMode,
+          interactionMode: DEFAULT_INTERACTION_MODE,
+          dispatchMode: "start",
+          createdAt: new Date().toISOString(),
+        },
+      }).finally(() => {
+        sendInFlightRef.current = false;
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          setThreadError(
+            activeThread.id,
+            thrownErrorMessage(squashAtomCommandFailure(result), m) ??
+              m(msg("Could not move the Pi conversation.")),
+          );
+        }
+      } else if (
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ===
+        promptAtSend
+      ) {
+        setComposerDraftPrompt(composerDraftTarget, "");
+        if (currentRouteThreadKeyRef.current === routeThreadKey) {
+          promptRef.current = "";
+          composerRef.current?.resetCursorState();
+        }
+      }
+      return;
+    }
     if (freshSessionAvailable && composerHoldsOnlyText && isClearComposerCommand(trimmed)) {
       armFreshSession(routeThreadKey);
       clearComposerDraftContent(composerDraftTarget);

@@ -2280,6 +2280,7 @@ export const layer: Layer.Layer<
           threadId: input.run.threadId,
           runId: input.run.id,
           runOrdinal: input.run.ordinal,
+          ...(input.run.piRedirect ? { piRedirect: true as const } : {}),
           providerTurnOrdinal: input.providerTurnOrdinal,
           ...(input.nativeThreadHasTurns === undefined
             ? {}

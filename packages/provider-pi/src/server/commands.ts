@@ -1,5 +1,14 @@
 import { type ServerProviderSkill, type ServerProviderSlashCommand } from "@t3tools/contracts";
 import * as Predicate from "effect/Predicate";
+import { PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
+import { PI_STOP_DELEGATE_COMMAND } from "./presentationExtensionSource.ts";
+import { PI_TRACKING_JOURNAL_COMMAND } from "./trackingJournalExtensionSource.ts";
+
+const bridgeCommands = new Set([
+  PI_T3_SERVICE_TIER_COMMAND,
+  PI_STOP_DELEGATE_COMMAND,
+  PI_TRACKING_JOURNAL_COMMAND,
+]);
 
 // Pi RPC get_commands omits TUI builtins. Advertise /compact so T3 can map it to RPC compact.
 const PI_COMPACT_SLASH_COMMAND: ServerProviderSlashCommand = {
@@ -51,7 +60,9 @@ export function parsePiDiscoveredCommands(data: unknown): PiDiscoveredCommands {
     const commandName = recordString(command, "name");
     if (commandName === undefined || commandName.length === 0) continue;
     const description = recordString(command, "description");
-    if (recordString(command, "source") === "skill") {
+    const source = recordString(command, "source");
+    if (source === "extension" && bridgeCommands.has(commandName)) continue;
+    if (source === "skill") {
       const name = commandName.startsWith("skill:")
         ? commandName.slice("skill:".length)
         : commandName;
@@ -82,8 +93,17 @@ export function parsePiDiscoveredCommands(data: unknown): PiDiscoveredCommands {
       });
       continue;
     }
+    if (source === "extension" && commandName === "move") {
+      slashCommands.push({
+        name: "move",
+        description: "Move this Pi conversation to another registered T3 project",
+        input: { hint: "Destination project directory" },
+      });
+      continue;
+    }
     slashCommands.push({
       name: commandName,
+      ...(source === "prompt" ? { inline: true } : {}),
       ...(description === undefined ? {} : { description }),
     });
   }

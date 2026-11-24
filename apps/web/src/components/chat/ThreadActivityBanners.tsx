@@ -33,18 +33,30 @@ import { BackgroundWorkDetails } from "./BackgroundWorkDetails";
 import { Button, InlineButton } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import {
+  PI_JOBS_STATUS,
+  PI_PLAN_STATUS,
+  PI_PRESENTATION_STATUS,
+} from "@t3tools/shared/piPresentation";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 import type { ThreadNowItem } from "./ThreadNow";
 
 export function extensionStatusBannerItem(
   statuses: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]>,
 ): ComposerBannerStackItem | null {
-  if (statuses.length === 0) return null;
+  const visible = statuses.filter(
+    ({ key }) =>
+      key !== PI_PRESENTATION_STATUS &&
+      key !== PI_PLAN_STATUS &&
+      key !== PI_JOBS_STATUS &&
+      key !== "t3.pi.title-owner.v1",
+  );
+  if (visible.length === 0) return null;
   return {
     id: "pi-extension-status",
     variant: "default",
     icon: <span>▸</span>,
-    title: <output>{`Pi · ${statuses.map((status) => status.text).join(" · ")}`}</output>,
+    title: <output>{`Pi · ${visible.map((status) => status.text).join(" · ")}`}</output>,
   };
 }
 
@@ -98,6 +110,8 @@ export function goalNowItem(
     readonly threadId: ThreadId;
     readonly goal: OrchestrationV2ProviderGoal;
     readonly isWorking: boolean;
+    readonly pauseAvailable: boolean;
+    readonly hideActions: boolean;
     readonly onSendCommand: (text: string, failureMessage: string) => Promise<void>;
   },
   resolve: MessageResolver = m,
@@ -125,8 +139,20 @@ export function goalNowItem(
     ),
     description: presentation.objective,
     // Clear stops goal work; Resume would stop unrelated work, so it waits.
-    actions: (
+    actions: input.hideActions ? null : (
       <>
+        {input.pauseAvailable && (
+          <>
+            <InlineButton
+              onClick={() =>
+                void onSendCommand("/goal pause", resolve(msg("Failed to pause goal.")))
+              }
+            >
+              <T context="verb, pauses the goal">Pause</T>
+            </InlineButton>
+            <span aria-hidden>·</span>
+          </>
+        )}
         {presentation.canResume && !isWorking ? (
           <>
             <InlineButton

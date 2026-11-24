@@ -230,6 +230,115 @@ const TASK_ID = ScheduledTaskId.make("task-1");
 const AUTOMATION_PROMPT = "Triage the inbox\n\nLabel every new issue and close duplicates.";
 
 describe("MessagesTimeline work rows", () => {
+  it("keeps the Pi shell preview to two lines until the user expands the command", async () => {
+    setup();
+    const source = makeStreamingTimelineFixture().visibleTurnItems[1]!;
+    const item = {
+      ...source.item,
+      providerThreadId: source.item.providerThreadId ?? null,
+      providerTurnId: source.item.providerTurnId ?? null,
+      type: "command_execution" as const,
+      status: "completed" as const,
+      input: "pwd",
+      output: "First line\nSecond line\nThird line",
+    };
+    await using screen = await renderTimeline(
+      [
+        {
+          id: "pi-shell",
+          kind: "work",
+          createdAt: CREATED_AT,
+          entry: {
+            id: "pi-shell",
+            createdAt: CREATED_AT,
+            label: "Shell",
+            toolTitle: "Shell",
+            tone: "tool",
+            toolLifecycleStatus: "completed",
+            projectedItem: { ...source, item },
+            structuredPayload: item,
+          },
+        },
+      ],
+      { compactPiTools: true, turnItemSource: { detail: () => Atom.make(AsyncResult.initial()) } },
+    );
+    const row = screen.container.querySelector<HTMLElement>('[data-work-entry-id="pi-shell"]')!;
+    expect(row.querySelector("[data-pi-shell-preview]")?.textContent).toBe(
+      "First line\nSecond line",
+    );
+    await click(row);
+    expect(row.querySelector("[data-pi-shell-preview]")).toBeNull();
+    expect(row.textContent).toContain("Third line");
+  });
+  it.each([false, true])("keeps a Pi edit preview bounded (grouped: %s)", async (grouped) => {
+    setup();
+    const source = makeStreamingTimelineFixture().visibleTurnItems[1]!;
+    const item = {
+      ...source.item,
+      providerThreadId: source.item.providerThreadId ?? null,
+      providerTurnId: source.item.providerTurnId ?? null,
+      type: "file_change" as const,
+      status: "completed" as const,
+      fileName: "test.ts",
+      diffStr: [
+        "-before",
+        "+after",
+        ...Array.from({ length: 210 }, (_, i) => ` context ${i}`),
+      ].join("\n"),
+    };
+    const onOpenToolDiff = vi.fn();
+    const nestedTools: Entry[] = grouped
+      ? [
+          {
+            id: "pi-script",
+            kind: "work",
+            createdAt: CREATED_AT,
+            entry: {
+              id: "pi-script",
+              createdAt: CREATED_AT,
+              label: "Script",
+              tone: "tool",
+              itemType: "dynamic_tool",
+              toolLifecycleStatus: "completed",
+            },
+          },
+        ]
+      : [];
+    await using screen = await renderTimeline(
+      [
+        ...nestedTools,
+        {
+          id: "pi-edit",
+          kind: "work",
+          createdAt: CREATED_AT,
+          entry: {
+            id: "pi-edit",
+            createdAt: CREATED_AT,
+            label: "Edit file",
+            toolTitle: "Edit file",
+            tone: "tool",
+            toolLifecycleStatus: "completed",
+            projectedItem: { ...source, item },
+            structuredPayload: item,
+          },
+        },
+      ],
+      { compactPiTools: true, onOpenToolDiff },
+    );
+    const row = screen.container.querySelector<HTMLElement>('[data-work-entry-id="pi-edit"]')!;
+    const preview = row.querySelector("[data-pi-inline-diff] pre")!;
+    expect(preview.querySelector(".text-diff-addition")?.textContent).toContain("+after");
+    expect(preview.querySelector(".text-diff-deletion")?.textContent).toContain("-before");
+    expect(preview.textContent).toContain("Diff preview truncated");
+    expect(preview.textContent).not.toContain("context 209");
+    expect(row.hasAttribute("aria-expanded")).toBe(false);
+    await click(row);
+    expect(row.querySelector("[data-pi-inline-diff] pre")).toBe(preview);
+    await click(screen.button("Open full diff"));
+    expect(onOpenToolDiff).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: source.sourceItemId }),
+    );
+  });
   it("keeps a tall HTML preview in place when its last accordion opens at the bottom", async () => {
     const props = baseProps();
     const html = injectHtmlRenderBootstrap(`<div style="height:1400px">Earlier preview content</div>
@@ -2188,79 +2297,86 @@ describe("compact reasoning math", () => {
   });
 });
 
-it("renders automatic compaction as one live divider that finishes with its reason and token delta", async () => {
-  setup();
-  const fixture = makeStreamingTimelineFixture();
-  const prompt = fixture.visibleTurnItems[3]!;
-  const assistant = fixture.visibleTurnItems[5]!;
-  if (prompt.item.type !== "user_message" || assistant.item.type !== "assistant_message") {
-    throw new Error("Expected streaming fixture messages");
-  }
-  const promptItem = prompt.item;
-  const compaction = {
-    ...assistant,
-    item: {
-      ...assistant.item,
-      type: "compaction" as const,
-      driver: null,
-      beforeTokenCount: 899_000,
-    },
-  };
-  const entries = (completed: boolean) =>
-    deriveTimelineEntriesFromVisibleTurnItems({
-      visibleTurnItems: [
-        {
-          ...prompt,
-          item: { ...promptItem, text: "/compact", idleCompaction: "beforeCacheExpires" },
-        },
-        {
-          ...compaction,
-          item: {
-            ...compaction.item,
-            status: completed ? "completed" : "running",
-            afterTokenCount: completed ? 19_000 : undefined,
+it.each([false, true])(
+  "renders one live compaction divider with the appropriate style (Pi: %s)",
+  async (compactPiTools) => {
+    setup();
+    const fixture = makeStreamingTimelineFixture();
+    const prompt = fixture.visibleTurnItems[3]!;
+    const assistant = fixture.visibleTurnItems[5]!;
+    if (prompt.item.type !== "user_message" || assistant.item.type !== "assistant_message") {
+      throw new Error("Expected streaming fixture messages");
+    }
+    const promptItem = prompt.item;
+    const compaction = {
+      ...assistant,
+      item: {
+        ...assistant.item,
+        type: "compaction" as const,
+        driver: null,
+        beforeTokenCount: 899_000,
+      },
+    };
+    const entries = (completed: boolean) =>
+      deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems: [
+          {
+            ...prompt,
+            item: { ...promptItem, text: "/compact", idleCompaction: "beforeCacheExpires" },
           },
-        },
-      ],
-      optimisticMessages: [],
-    });
-  const props = baseProps();
-  const ui = (completed: boolean) => (
-    <MessagesTimeline
-      {...props}
-      timelineEntries={entries(completed)}
-      isWorking={!completed}
-      isCompacting={!completed}
-      activeTurnStartedAt={fixture.time(5)}
-      latestRun={{
-        runId: fixture.runId,
-        status: completed ? "completed" : "running",
-        startedAt: fixture.time(5),
-        completedAt: completed ? fixture.time(9) : null,
-      }}
-    />
-  );
-  const container = document.createElement("div");
-  container.style.cssText = "height: 1200px; width: 900px; display: flex; flex-direction: column;";
-  await using screen = await render(ui(false), { container });
-  await expect
-    .element(screen.getByRole("separator", { name: "Compacting before the cache expires…" }))
-    .toBeVisible();
-  expect(container.textContent).not.toContain("/compact");
-  expect(container.textContent).not.toContain("Thinking");
-  expect(container.textContent).not.toContain("Working");
-  expect(container.querySelectorAll('[role="separator"]')).toHaveLength(1);
-  await screen.rerender(ui(true));
-  await expect
-    .element(
-      screen.getByRole("separator", {
-        name: "Auto-compacted before cache expiry 899K → 19K tokens",
-      }),
-    )
-    .toBeVisible();
-  expect(container.querySelectorAll('[role="separator"]')).toHaveLength(1);
-  expect(container.textContent).not.toContain("Compacting before");
-});
+          {
+            ...compaction,
+            item: {
+              ...compaction.item,
+              status: completed ? "completed" : "running",
+              afterTokenCount: completed ? 19_000 : undefined,
+            },
+          },
+        ],
+        optimisticMessages: [],
+      });
+    const props = baseProps();
+    const ui = (completed: boolean) => (
+      <MessagesTimeline
+        {...props}
+        timelineEntries={entries(completed)}
+        compactPiTools={compactPiTools}
+        isWorking={!completed}
+        isCompacting={!completed}
+        activeTurnStartedAt={fixture.time(5)}
+        latestRun={{
+          runId: fixture.runId,
+          status: completed ? "completed" : "running",
+          startedAt: fixture.time(5),
+          completedAt: completed ? fixture.time(9) : null,
+        }}
+      />
+    );
+    const container = document.createElement("div");
+    container.style.cssText =
+      "height: 1200px; width: 900px; display: flex; flex-direction: column;";
+    await using screen = await render(ui(false), { container });
+    await expect
+      .element(screen.getByRole("separator", { name: "Compacting before the cache expires…" }))
+      .toBeVisible();
+    expect(container.querySelectorAll(".pi-compacting-label")).toHaveLength(compactPiTools ? 1 : 0);
+    expect(container.textContent).not.toContain("/compact");
+    expect(container.textContent).not.toContain("Thinking");
+    expect(container.textContent).not.toContain("Working");
+    expect(container.querySelectorAll('[role="separator"]')).toHaveLength(1);
+    await screen.rerender(ui(true));
+    await expect
+      .element(
+        screen.getByRole("separator", {
+          name: "Auto-compacted before cache expiry 899K → 19K tokens",
+        }),
+      )
+      .toBeVisible();
+    expect(container.querySelectorAll('[role="separator"]')).toHaveLength(1);
+    expect(container.textContent).not.toContain("Compacting before");
+    expect(container.querySelectorAll(".pi-compacting-label")).toHaveLength(0);
+  },
+);
 
 function TimelineChangedFilesCard() {
   const [expanded, setExpanded] = useState(true);

@@ -332,6 +332,7 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
     branch: "main",
     worktreePath: null,
     activeProviderThreadId: thread.providerThreads?.[0]?.id ?? null,
+    ...(thread.providerThreads?.[0]?.goal ? { goal: thread.providerThreads[0].goal } : {}),
     ...(thread.issues === undefined ? {} : { issues: thread.issues }),
     lineage: {
       rootThreadId: parentOf(thread) ?? thread.id,
@@ -612,14 +613,17 @@ export function installFakeEnvironment(
     /** Commands left unanswered even when accepting, until `rejectPendingCommand`. */
     readonly holdCommand?: (command: OrchestrationV2Command) => boolean;
     readonly providers?: ReadonlyArray<unknown>;
+    readonly settings?: Partial<ServerConfig["settings"]>;
   },
 ): Disposable {
   threads = fixtures;
+  const config = makeServerConfig(
+    options?.providers ?? [CODEX_PROVIDER],
+    fixtures.some((thread) => (thread.issues?.length ?? 0) > 0),
+  );
   baseServerConfig = {
-    ...makeServerConfig(
-      options?.providers ?? [CODEX_PROVIDER],
-      fixtures.some((thread) => (thread.issues?.length ?? 0) > 0),
-    ),
+    ...config,
+    settings: { ...config.settings, ...options?.settings },
     keybindings: options?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS,
   };
   dispatched = [];

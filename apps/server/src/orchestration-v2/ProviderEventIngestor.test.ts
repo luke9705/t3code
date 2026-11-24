@@ -598,6 +598,23 @@ layer("ProviderEventIngestorV2", (it) => {
         ["provider-thread.updated"],
       );
       assert.equal(latestThreadSequence, 2);
+      const rename = (from: string, to: string) =>
+        ingestor.ingestNormalized({
+          providerSessionId,
+          providerInstanceId: modelSelection.instanceId,
+          threadId: threadEvent.threadId,
+          event: {
+            type: "provider_thread.updated",
+            driver: CODEX_DRIVER,
+            providerThread,
+            nativeTitleChange: { from, to },
+          },
+        });
+      yield* rename("Provider event ingestor", "Title from native Pi");
+      yield* rename("Provider event ingestor", "Stale title");
+      const renamed = yield* projectionStore.getThread(threadEvent.threadId);
+      assert.equal(renamed.title, "Title from native Pi");
+      assert.isTrue(renamed.titleRenamed);
     }),
   );
 

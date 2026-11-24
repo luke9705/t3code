@@ -107,6 +107,8 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FiberSet from "effect/FiberSet";
 import * as FileSystem from "effect/FileSystem";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -7187,6 +7189,129 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     return thread;
   });
 
+  const dispatchPiMove = Effect.fn("Orchestrator.dispatchPiMove")(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    argument: string,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    const reject = (cause: string) =>
+      new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause,
+      });
+    const projection = yield* loadProjectionForCommand(
+      command,
+      ["runs", "runtimeRequests", "providerThreads", "providerSessions"],
+      { turnItemTypes: [] },
+    );
+    const thread = projection.thread;
+    if (
+      thread.archivedAt !== null ||
+      thread.deletedAt !== null ||
+      threadHasUnfinishedWork(projection)
+    ) {
+      return yield* reject("Finish or stop the thread's work before moving its Pi conversation.");
+    }
+    const nativeThread = projection.providerThreads.find(
+      ({ id }) => id === thread.activeProviderThreadId,
+    );
+    if (nativeThread?.driver !== "pi" || nativeThread.nativeThreadRef?.strength !== "strong")
+      return yield* reject("Only a saved Pi conversation can be moved.");
+    const sessionId = nativeThread.providerSessionId;
+    const session = projection.providerSessions.find(({ id }) => id === sessionId);
+    if (session && (yield* sessionHasBackgroundWork(session, projection.providerThreads))) {
+      return yield* reject("Finish the session's background work before moving it.");
+    }
+    const runtime =
+      sessionId === null
+        ? Option.none()
+        : yield* providerSessions.get(sessionId).pipe(mapDispatchError(command));
+    const directory = argument.trim().replace(/^(["'])(.*)\1$/, "$2");
+    if (!directory) return yield* reject("Usage: /move <registered project directory>");
+    const sourceProject = yield* projects.get(thread.projectId).pipe(mapDispatchError(command));
+    const sourceCwd = thread.worktreePath ?? Option.getOrUndefined(sourceProject)?.workspaceRoot;
+    if (!sourceCwd) return yield* reject("The source project has no workspace.");
+    const destination = yield* fileSystem
+      .realPath(
+        path.resolve(sourceCwd, expandHomePath(directory, yield* HostProcess.HomeDirectory)),
+      )
+      .pipe(Effect.mapError(() => reject("The destination workspace is not accessible.")));
+    const project = yield* projects
+      .findActiveByWorkspaceRoot(destination)
+      .pipe(mapDispatchError(command));
+    if (Option.isNone(project))
+      return yield* reject(
+        "Add the destination folder as a T3 project before moving this Pi conversation.",
+      );
+    const canonicalSource = yield* fileSystem
+      .realPath(sourceCwd)
+      .pipe(Effect.orElseSucceed(() => sourceCwd));
+    if (destination === canonicalSource)
+      return yield* reject("The Pi conversation is already in that workspace.");
+    const stage = Option.isSome(runtime)
+      ? runtime.value.stageThreadRelocation
+      : (yield* providerAdapters
+          .get(nativeThread.providerInstanceId)
+          .pipe(mapDispatchError(command))).stageSavedThreadRelocation;
+    if (!stage) return yield* reject("This Pi provider cannot move the saved conversation.");
+    const staged = yield* stage({ providerThread: nativeThread, cwd: destination }).pipe(
+      Effect.mapError(() =>
+        reject("Pi could not stage the conversation. The source is unchanged."),
+      ),
+    );
+    if (
+      staged.id !== nativeThread.id ||
+      staged.nativeThreadRef?.nativeId == null ||
+      staged.nativeThreadRef.nativeId === nativeThread.nativeThreadRef?.nativeId
+    ) {
+      return yield* reject(
+        "Pi did not return a distinct destination session. The source is unchanged.",
+      );
+    }
+    const now = yield* DateTime.now;
+    if (session) {
+      yield* dispatchProviderSessionDetach(
+        {
+          type: "provider-session.detach",
+          commandId: command.commandId,
+          threadId: thread.id,
+          providerSessionId: session.id,
+          reason: "Pi conversation moved.",
+        },
+        events,
+        effects,
+      );
+    }
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "provider-thread.updated",
+      threadId: thread.id,
+      providerInstanceId: nativeThread.providerInstanceId,
+      occurredAt: now,
+      payload: staged,
+    });
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.metadata-updated",
+      threadId: thread.id,
+      providerInstanceId: thread.providerInstanceId,
+      occurredAt: now,
+      payload: {
+        ...thread,
+        projectId: project.value.projectId,
+        worktreePath: null,
+        branch: null,
+        updatedAt: now,
+      },
+    });
+  });
+
   const dispatchMessage = Effect.fn("Orchestrator.dispatchMessage")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -7250,9 +7375,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
       return;
     }
-    const activeProviderInstanceId = projection.providerThreads.find(
+    const activeThreadProvider = projection.providerThreads.find(
       (candidate) => candidate.id === projection.thread.activeProviderThreadId,
-    )?.providerInstanceId;
+    );
+    const move = /^\/move(?:\s+([\s\S]*))?$/.exec(command.text.trim());
+    if (
+      move &&
+      activeThreadProvider?.driver === "pi" &&
+      command.createdBy === "user" &&
+      command.attachments.length === 0 &&
+      (command.modelSelection ?? projection.thread.modelSelection).instanceId ===
+        activeThreadProvider.providerInstanceId
+    ) {
+      return yield* dispatchPiMove(command, move[1] ?? "", events, effects);
+    }
+    const activeProviderInstanceId = activeThreadProvider?.providerInstanceId;
     // Another provider is handed what ran since it last saw the thread, which can be older than
     // the compaction, so a provider switch reads the whole history.
     if (
@@ -12022,6 +12159,49 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const targetMessage = projection.messages.find(
       (message) => message.id === target?.userMessageId,
     );
+    if (command.redirect === true) {
+      const owner = projection.providerThreads.find(
+        (thread) => thread.id === target?.providerThreadId,
+      );
+      if (
+        !target ||
+        target.status !== "running" ||
+        owner?.driver !== "pi" ||
+        modelSelection.instanceId !== target.providerInstanceId ||
+        goalCommand !== null ||
+        isSlashCommand(queuedMessage) ||
+        queuedRun.freshContext === true ||
+        queuedMessage.context?.guest !== undefined ||
+        projection.runtimeRequests.some((request) => request.status === "pending") ||
+        (yield* stopReachedRun(command, command.threadId, target.id))
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "A queued prompt can only redirect the active Pi turn when no approval or question is pending.",
+        });
+      }
+      yield* emitEvent({
+        type: "run.updated",
+        threadId: command.threadId,
+        runId: queuedRun.id,
+        nodeId: queuedRootNode.id,
+        providerInstanceId: queuedRun.providerInstanceId,
+        occurredAt: now,
+        payload: { ...queuedRun, queuePosition: 1, queueHeld: false, piRedirect: true },
+      });
+      return yield* stopRunForQueuedCommand({
+        command,
+        events,
+        effects,
+        projection,
+        queuedRunId: queuedRun.id,
+        targetRunId: target.id,
+        reason: "Redirected by a queued Pi prompt",
+        now,
+      });
+    }
     // A compacting turn cannot take steering input, so steering skips the compaction instead.
     if (
       target !== undefined &&
@@ -13803,7 +13983,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       subagent === undefined ||
       subagent.runId !== command.runId ||
       subagent.origin !== "provider_native" ||
-      subagent.driver !== "claudeAgent" ||
+      (subagent.driver !== "claudeAgent" && subagent.driver !== "pi") ||
       subagent.nativeTaskRef?.strength !== "strong" ||
       subagent.nativeTaskRef.nativeId === null
     ) {
@@ -14472,6 +14652,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // A failed interrupt may have written part of its events, so they are kept apart.
       // The queued command then waits for the turn to end.
       if (Exit.isFailure(interrupted)) {
+        if (command.type === "queued-message.promote-to-steer" && command.redirect === true) {
+          return yield* Effect.failCause(interrupted.cause);
+        }
         yield* Effect.logWarning("queued command could not stop the running turn", {
           threadId: command.threadId,
           runId: targetRunId,

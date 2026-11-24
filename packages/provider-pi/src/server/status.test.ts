@@ -12,7 +12,10 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { checkPiProviderStatus } from "./status.ts";
+import { checkPiProviderStatus as probePiProviderStatus } from "./status.ts";
+
+const checkPiProviderStatus = (...args: Parameters<typeof probePiProviderStatus>) =>
+  TestClock.withLive(probePiProviderStatus(...args));
 
 const encoder = new TextEncoder();
 const decodeRpcRequest = Schema.decodeSync(
@@ -239,7 +242,7 @@ describe("PiProvider", () => {
             : processHandle({ stderr: "RPC startup failed", exitCode: 1 }),
         );
       });
-      const fiber = yield* checkPiProviderStatus(settings).pipe(
+      const fiber = yield* probePiProviderStatus(settings).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.forkChild,
       );
@@ -387,7 +390,7 @@ describe("PiProvider", () => {
         null,
         Deferred.succeed(modelRequested, undefined).pipe(Effect.asVoid),
       );
-      const fiber = yield* checkPiProviderStatus(settings).pipe(
+      const fiber = yield* probePiProviderStatus(settings).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.forkChild,
       );

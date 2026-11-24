@@ -523,8 +523,10 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
     turn: ProviderAdapter.ProviderAdapterV2SteerInput,
   ) => Effect.Effect<void, ProviderAdapter.ProviderAdapterV2Error> = () => Effect.void,
   extraAdapters: ReadonlyArray<ProviderAdapter.ProviderAdapterV2["Service"]> = [],
+  providerDriver?: ProviderDriverKind,
 ) {
-  const driver = ProviderDriverKind.make(nativeGoals === undefined ? "codex" : "opencode");
+  const driver =
+    providerDriver ?? ProviderDriverKind.make(nativeGoals === undefined ? "codex" : "opencode");
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
   const started: ProviderAdapter.ProviderAdapterV2TurnInput[] = [];
@@ -613,6 +615,21 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
               updatedAt: now,
             }),
           resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
+          ...(driver === "pi"
+            ? {
+                stageThreadRelocation: ({ providerThread, cwd: destination }) =>
+                  Effect.succeed({
+                    ...providerThread,
+                    providerSessionId: null,
+                    nativeThreadRef: {
+                      driver,
+                      nativeId: `${destination}/staged.jsonl`,
+                      strength: "strong" as const,
+                    },
+                    status: "not_loaded" as const,
+                  }),
+              }
+            : {}),
           startTurn,
           compactThread: startTurn,
           steerTurn: (turn) =>
@@ -2597,6 +2614,181 @@ it.effect.each(["auto", "deferred", "promote-edited"] as const)(
     ),
 );
 
+it.effect(
+  "interrupts the active Pi run and starts the existing queued message once on redirect",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { started, steered, interrupted, layer, startFirstTurn } =
+          yield* nextTurnSelectionHarness(
+            "pi-queued-redirect",
+            false,
+            true,
+            Effect.void,
+            true,
+            undefined,
+            undefined,
+            [],
+            ProviderDriverKind.make("pi"),
+          );
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = yield* startFirstTurn;
+          const target = started[0]!;
+          const messageId = MessageId.make("message:pi-redirect");
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("enqueue-pi-redirect"),
+            threadId,
+            messageId,
+            text: "Use a different file",
+            attachments: [],
+            dispatchMode: { type: "queue_after_active" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+            (run) => run.userMessageId === messageId,
+          )!;
+          const redirected = yield* orchestrator.streamDomainEvents.pipe(
+            Stream.filter(
+              (event) =>
+                event.type === "provider-turn.updated" &&
+                event.runId === queued.id &&
+                event.payload.status === "running",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
+          const command = {
+            type: "queued-message.promote-to-steer",
+            commandId: CommandId.make("pi-redirect"),
+            threadId,
+            queuedRunId: queued.id,
+            targetRunId: target.runId,
+            redirect: true,
+          } as const;
+          yield* orchestrator.dispatch(command);
+          yield* orchestrator.dispatch(command);
+          yield* worker.drain();
+          yield* Fiber.join(redirected);
+          assert.lengthOf(interrupted, 1);
+          assert.isEmpty(steered);
+          assert.lengthOf(started, 2);
+          assert.equal(started[1]?.runId, queued.id);
+          assert.equal(started[1]?.message.messageId, messageId);
+          assert.equal(started[1]?.message.text, "Use a different file");
+          assert.isTrue(started[1]?.piRedirect);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+);
+
+it.effect("moves an idle Pi conversation to a registered project", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = yield* checkpointWorkspace("pi-move-destination");
+      const { layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+        "pi-native-move",
+        false,
+        true,
+        Effect.void,
+        true,
+        undefined,
+        undefined,
+        [],
+        ProviderDriverKind.make("pi"),
+      );
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const threadId = yield* startFirstTurn;
+        const before = yield* orchestrator.getThreadProjection(threadId);
+        const native = before.providerThreads[0]!;
+        const targetProject = ProjectId.make("project:pi-move-destination");
+        const move = (key: string) =>
+          orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(key),
+            threadId,
+            messageId: MessageId.make("message:" + key),
+            text: "/move " + target,
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+        yield* move("busy-move").pipe(Effect.flip);
+        const completedAt = yield* DateTime.now;
+        const turn = before.providerTurns[0]!;
+        const run = before.runs[0]!;
+        const sink = yield* EventSink.EventSinkV2;
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make("event:pi-move-turn-completed"),
+              type: "provider-turn.updated",
+              threadId,
+              runId: run.id,
+              occurredAt: completedAt,
+              payload: { ...turn, status: "completed", completedAt },
+            },
+            {
+              id: EventId.make("event:pi-move-run-completed"),
+              type: "run.updated",
+              threadId,
+              runId: run.id,
+              occurredAt: completedAt,
+              payload: { ...run, status: "completed", completedAt },
+            },
+          ],
+        });
+        yield* move("unknown-project").pipe(Effect.flip);
+        const unchanged = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(unchanged.thread.projectId, before.thread.projectId);
+        assert.deepEqual(unchanged.providerThreads[0]?.nativeThreadRef, native.nativeThreadRef);
+        const acceptedAt = yield* DateTime.now;
+        const now = DateTime.formatIso(acceptedAt);
+        const projectCommandId = CommandId.make("pi-move-project");
+        yield* sink.commitProjectCommand({
+          commandId: projectCommandId,
+          projectId: targetProject,
+          commandType: "project.create",
+          acceptedAt,
+          event: {
+            eventId: EventId.make("event:pi-move-project"),
+            aggregateKind: "project",
+            aggregateId: targetProject,
+            occurredAt: now,
+            commandId: projectCommandId,
+            causationEventId: null,
+            correlationId: null,
+            metadata: {},
+            type: "project.created",
+            payload: {
+              projectId: targetProject,
+              title: "Move target",
+              workspaceRoot: target,
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        });
+        yield* move("valid-move");
+        const moved = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(moved.thread.projectId, targetProject);
+        assert.equal(moved.thread.worktreePath, null);
+        assert.equal(moved.providerThreads[0]?.nativeThreadRef?.nativeId, target + "/staged.jsonl");
+        assert.equal(moved.providerThreads[0]?.providerSessionId, null);
+        assert.lengthOf(moved.runs, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
 it.effect("steers a promoted queued message with the selection it was queued with", () =>
   Effect.gen(function* () {
     const { started, steered, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
@@ -2621,6 +2813,23 @@ it.effect("steers a promoted queued message with the selection it was queued wit
       const queuedRun = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
         (run) => run.status === "queued",
       )!;
+      const rejectedRedirect = yield* orchestrator
+        .dispatch({
+          type: "queued-message.promote-to-steer",
+          commandId: CommandId.make("non-pi-redirect"),
+          threadId,
+          queuedRunId: queuedRun.id,
+          targetRunId: started[0]!.runId,
+          redirect: true,
+        })
+        .pipe(Effect.flip);
+      assert.include(userFacingDispatchErrorMessage(rejectedRedirect), "active Pi turn");
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.id === queuedRun.id,
+        )?.status,
+        "queued",
+      );
       yield* orchestrator.dispatch({
         type: "queued-message.promote-to-steer",
         commandId: CommandId.make("promote"),

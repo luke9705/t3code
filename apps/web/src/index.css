@@ -2483,6 +2483,47 @@ code {
   animation: preview-loading-progress 5.3s cubic-bezier(0.1, 0.5, 0.2, 1) forwards;
 }
 
+:root {
+  --pi-build-indicator: #73b9f8;
+  --pi-plan-indicator: #cc5ce9;
+}
+
+[data-pi-mode="build"] {
+  --pi-mode-indicator: var(--pi-build-indicator);
+}
+[data-pi-mode="plan"] {
+  --pi-mode-indicator: var(--pi-plan-indicator);
+}
+[data-pi-mode] [data-pi-mode-label] {
+  color: var(--pi-mode-indicator);
+}
+
+.pi-compacting-label {
+  color: color-mix(in oklab, var(--pi-build-indicator), var(--pi-plan-indicator));
+}
+
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .pi-compacting-label {
+    background-image: linear-gradient(
+      90deg,
+      var(--pi-build-indicator),
+      var(--pi-plan-indicator),
+      var(--pi-build-indicator)
+    );
+    background-size: 200% 100%;
+    background-clip: text;
+    color: transparent;
+    animation: pi-compacting 2.4s linear infinite;
+    animation-play-state: var(--visible-animation-state, paused);
+  }
+}
+
+@keyframes pi-compacting {
+  to {
+    background-position: 200% 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .preview-loading-progress,
   .preview-loading-progress[data-loading="true"] {

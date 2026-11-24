@@ -152,6 +152,14 @@ export function workEntryDisplayLabel(
   resolve: MessageResolver = m,
 ) {
   if (entry.itemType === "system_notice") return entry.label;
+  const itemPayload = entry.structuredPayload;
+  if (
+    itemPayload?.type === "dynamic_tool" &&
+    itemPayload.toolName === "codemode" &&
+    itemPayload.title &&
+    itemPayload.title !== "codemode"
+  )
+    return itemPayload.title;
   if (entry.itemType === "reasoning" || entry.tone === "thinking") {
     const thought = entry.detail?.trim().replace(/\s+/g, " ");
     return thought || entry.label;
@@ -1619,6 +1627,7 @@ export function deriveMessagesTimelineRows(
     expandedRunIds?: ReadonlySet<RunId>;
     expandedAttemptIds?: ReadonlySet<RunAttemptId>;
     expandedWorkGroupIds?: ReadonlySet<string>;
+    compactPiTools?: boolean;
     isWorking: boolean;
     /** Native subagent work has no app run; runless entries form the live response. */
     runlessWorkActive?: boolean;
@@ -2197,6 +2206,19 @@ export function deriveMessagesTimelineRows(
             nextRows.push(
               expandedWorkGroupRow(groupId, timelineEntry.createdAt, visibleGroupedEntries),
             );
+          } else if (input.compactPiTools) {
+            const diffs = visibleGroupedEntries.filter(
+              (entry) => entry.projectedItem?.item.type === "file_change",
+            );
+            if (diffs.length > 0) {
+              nextRows.push({
+                kind: "work",
+                id: `pi-diffs:${groupId}`,
+                createdAt: timelineEntry.createdAt,
+                groupedEntries: diffs,
+                isExpandedToolGroup: false,
+              });
+            }
           }
         }
         nextRows.push(

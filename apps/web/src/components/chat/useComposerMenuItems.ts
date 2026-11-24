@@ -326,7 +326,39 @@ export function useComposerMenuItems({
           (item.command.name !== "clear" || !freshSessionAvailable),
       );
       const slashCommandItems = slashCommandItemsForPromptPosition(
-        [...builtInSlashCommandItems, ...visibleProviderSlashCommandItems, ...skillItems],
+        [
+          ...builtInSlashCommandItems,
+          ...(selectedProvider === "pi" &&
+          !visibleProviderSlashCommandItems.some(
+            ({ command }) => command.name === "context-inspect",
+          )
+            ? [
+                {
+                  id: "provider-slash-command:pi:context-inspect",
+                  type: "provider-slash-command" as const,
+                  provider: selectedProvider,
+                  command: { name: "context-inspect" },
+                  label: "/context-inspect",
+                  description: gt("Inspect the context composition"),
+                },
+              ]
+            : []),
+          ...(selectedProvider === "pi" &&
+          !visibleProviderSlashCommandItems.some(({ command }) => command.name === "color")
+            ? [
+                {
+                  id: "provider-slash-command:pi:color",
+                  type: "provider-slash-command" as const,
+                  provider: selectedProvider,
+                  command: { name: "color" },
+                  label: "/color",
+                  description: gt("Edit Pi indicator and accent colors"),
+                },
+              ]
+            : []),
+          ...visibleProviderSlashCommandItems,
+          ...skillItems,
+        ],
         composerTrigger.rangeStart === 0,
       );
       return searchSlashCommandItems(slashCommandItems, query);

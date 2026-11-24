@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./appBranding": {
+      "types": "./src/appBranding.ts",
+      "import": "./src/appBranding.ts"
+    },
+    "./piPresentation": {
+      "types": "./src/piPresentation.ts",
+      "import": "./src/piPresentation.ts"
+    },
     "./png": {
       "types": "./src/png.ts",
       "import": "./src/png.ts"

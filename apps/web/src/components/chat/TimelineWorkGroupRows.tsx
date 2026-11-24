@@ -55,6 +55,7 @@ import {
   ThreadReadLabel,
   ReasoningTraceContent,
   SimpleWorkEntryRow,
+  PiStopSubagentButton,
 } from "./TimelineWorkEntryRow";
 import {
   thoughtPreviewMarkdown,
@@ -353,7 +354,9 @@ export function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
   const { isCompacting, isPreparingWorktree, backgroundWorktreeSetup } =
     use(TimelineRowActivityCtx);
   const compacting = row.compacting === true || isCompacting;
-  const shimmer = isPreparingWorktree || compacting;
+  const { compactPiTools } = use(TimelineRowCtx);
+  const piCompacting = compactPiTools && compacting && !isPreparingWorktree;
+  const shimmer = isPreparingWorktree || (compacting && !piCompacting);
   const label = isPreparingWorktree ? (
     <T>Setting up worktree…</T>
   ) : compacting ? (
@@ -369,8 +372,12 @@ export function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
     <div className="border-b border-border/60 pb-2 pt-1">
       <div className="flex h-6 min-w-0 items-baseline gap-2 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
         <span
-          ref={shimmer ? observeVisibleAnimation : undefined}
-          className="relative shrink-0 overflow-hidden whitespace-nowrap"
+          data-pi-mode-label={!compacting && !isPreparingWorktree ? "true" : undefined}
+          ref={shimmer || piCompacting ? observeVisibleAnimation : undefined}
+          className={cn(
+            "relative shrink-0 overflow-hidden whitespace-nowrap",
+            piCompacting && "pi-compacting-label",
+          )}
         >
           {label}
           {shimmer ? <ActivityShimmerOverlay>{label}</ActivityShimmerOverlay> : null}
@@ -635,7 +642,7 @@ export function LiveWorkEntryTimelineRow({
       : "";
   const thoughtIsStatus = thoughtLine !== "" && row.entry === row.thought;
 
-  return (
+  const activity = (
     <button
       type="button"
       className={cn(
@@ -712,8 +719,25 @@ export function LiveWorkEntryTimelineRow({
         toolIcon={row.entry.toolIcon ?? row.entry.toolSource?.icon}
         failed={failed}
         active={row.active}
+        shimmer={
+          ctx.compactPiTools === true &&
+          item?.type === "dynamic_tool" &&
+          item.toolName === "update_plan"
+        }
       />
     </button>
+  );
+  return item?.type === "subagent" && item.canStop ? (
+    <div className="flex min-w-0 items-center gap-2">
+      <div className="min-w-0 flex-1">{activity}</div>
+      <PiStopSubagentButton
+        environmentId={ctx.activeThreadEnvironmentId}
+        threadId={item.threadId}
+        subagentId={item.subagentId}
+      />
+    </div>
+  ) : (
+    activity
   );
 }
 

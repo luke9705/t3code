@@ -542,16 +542,43 @@ export const layer: Layer.Layer<
                 threadId,
                 payload: input.event.providerThread,
               });
-              return input.event.retainedNativeTurnIds === undefined
-                ? [updated]
-                : [
-                    updated,
-                    ...(yield* rollBackRewoundRuns(input, {
+              const events = [updated];
+              const change = input.event.nativeTitleChange;
+              if (change !== undefined) {
+                const thread = yield* projections.findThread(threadId);
+                if (
+                  thread?.activeProviderThreadId === input.event.providerThread.id &&
+                  thread.title === change.from &&
+                  change.to !== change.from &&
+                  change.to.trim()
+                ) {
+                  const now = yield* DateTime.now;
+                  events.push(
+                    yield* makeDomainEvent(input, {
+                      type: "thread.metadata-updated",
                       threadId,
-                      providerThreadId: input.event.providerThread.id,
-                      retainedNativeTurnIds: new Set(input.event.retainedNativeTurnIds),
-                    })),
-                  ];
+                      payload: {
+                        ...thread,
+                        title: change.to,
+                        titleRenamed: true,
+                        titleRegeneration: null,
+                        updatedAt: now,
+                      },
+                      occurredAt: now,
+                    }),
+                  );
+                }
+              }
+              if (input.event.retainedNativeTurnIds !== undefined) {
+                events.push(
+                  ...(yield* rollBackRewoundRuns(input, {
+                    threadId,
+                    providerThreadId: input.event.providerThread.id,
+                    retainedNativeTurnIds: new Set(input.event.retainedNativeTurnIds),
+                  })),
+                );
+              }
+              return events;
             }
             case "provider_turn.updated":
               return [
@@ -921,7 +948,13 @@ export const layer: Layer.Layer<
                   ? threadCommands.withLock(input.event.appThread.id, effect)
                   : input.event.type === "thread_model_selection.updated"
                     ? threadCommands.withLock(input.event.threadId, effect)
-                    : effect,
+                    : input.event.type === "provider_thread.updated" &&
+                        input.event.nativeTitleChange !== undefined
+                      ? threadCommands.withLock(
+                          input.event.providerThread.appThreadId ?? input.threadId,
+                          effect,
+                        )
+                      : effect,
             ),
         ),
     });

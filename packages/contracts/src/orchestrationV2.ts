@@ -830,6 +830,7 @@ export const OrchestrationV2Run = Schema.Struct({
   queuePosition: Schema.optional(Schema.NullOr(PositiveInt)),
   queueHeld: Schema.optional(Schema.Boolean),
   steerWhenReadyRunId: Schema.optional(RunId),
+  piRedirect: Schema.optionalKey(Schema.Literal(true)),
   requestedAt: Schema.DateTimeUtc,
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
@@ -1215,6 +1216,8 @@ export type OrchestrationV2PendingBackgroundTask = typeof OrchestrationV2Pending
 
 export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
   cursorStoreCwd: Schema.optional(TrimmedNonEmptyString),
+  piMode: Schema.optionalKey(Schema.Literals(["plan", "build"])),
+
   modelSelection: Schema.optional(ModelSelection),
   title: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   updatedAt: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -2104,6 +2107,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("subagent"),
     subagentId: NodeId,
+    canStop: Schema.optionalKey(Schema.Literal(true)),
     origin: Schema.Literals(["provider_native", "app_owned"]),
     driver: ProviderDriverKind,
     providerInstanceId: ProviderInstanceId,
@@ -3001,6 +3005,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("subagent"),
     subagentId: NodeId,
+    canStop: Schema.optionalKey(Schema.Literal(true)),
     origin: Schema.Literals(["provider_native", "app_owned"]),
     driver: ProviderDriverKind,
     providerInstanceId: ProviderInstanceId,
@@ -3689,6 +3694,7 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     queuedRunId: RunId,
     targetRunId: RunId,
+    redirect: Schema.optionalKey(Schema.Literal(true)),
   }),
   Schema.Struct({
     type: Schema.Literal("queue.resume"),

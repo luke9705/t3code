@@ -64,6 +64,7 @@ const QUEUE_VISIBLE_ROWS = 3;
 
 export interface QueuedRunsControlHandle {
   steerNext: (repeat: boolean) => boolean;
+  redirectNext: (repeat: boolean) => boolean;
   editLatest: (repeat: boolean) => boolean;
 }
 
@@ -174,7 +175,7 @@ export function QueuedRunsControl({
     })),
   ];
 
-  const sendQueuedMessage = async (queuedRunId: RunId) => {
+  const sendQueuedMessage = async (queuedRunId: RunId, redirect?: true) => {
     const freshContext = queued.some(
       ({ run }) => run.id === queuedRunId && run.freshContext === true,
     );
@@ -189,7 +190,12 @@ export function QueuedRunsControl({
       : activeRun !== null
         ? await promote({
             environmentId: props.environmentId,
-            input: { threadId: props.threadId, queuedRunId, targetRunId: activeRun.id },
+            input: {
+              threadId: props.threadId,
+              queuedRunId,
+              targetRunId: activeRun.id,
+              ...(redirect ? { redirect } : {}),
+            },
           })
         : null;
     steerInFlightRef.current = false;
@@ -208,6 +214,22 @@ export function QueuedRunsControl({
   };
 
   useImperativeHandle(ref, () => ({
+    redirectNext(repeat) {
+      const next = queued[0];
+      if (
+        !next ||
+        activeRun?.status !== "running" ||
+        !workflow?.canPromoteToSteer ||
+        workflow.canSendNow ||
+        next.run.freshContext ||
+        next.context?.guest ||
+        !next.message ||
+        isSlashCommand(next.message)
+      )
+        return false;
+      if (!repeat && busyRunId === null) void sendQueuedMessage(next.run.id, true);
+      return true;
+    },
     steerNext(repeat) {
       const next = queued[0];
       if (!next || !canSendRun(next.run.freshContext === true)) return false;

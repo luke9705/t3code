@@ -4,6 +4,13 @@ import { AgentScope } from "@t3tools/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { readToolOutputImage } from "@t3tools/shared/toolOutput";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import {
+  normalizePiJobs,
+  normalizePiPresentation,
+  PI_JOBS_STATUS,
+  PI_PLAN_STATUS,
+  PI_PRESENTATION_STATUS,
+} from "@t3tools/shared/piPresentation";
 import * as Predicate from "effect/Predicate";
 import {
   ProviderDriverKind,
@@ -12,6 +19,7 @@ import {
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
+  OrchestrationV2ProviderGoal,
   type OrchestrationV2ProviderRef,
   type OrchestrationV2ProviderRetry,
   type OrchestrationV2ProviderSession,
@@ -66,6 +74,7 @@ import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/sel
 import {
   findReportedPiModel,
   makePiRpcConnection,
+  PI_MODEL_REGISTRATION_GRACE_MS,
   resolvePiModelSlug,
   piRecordField as recordField,
   piRecordNumber as recordNumber,
@@ -81,6 +90,8 @@ import {
 } from "./mcpInjection.ts";
 import { PI_FILE_CHANGE_TOOLS, PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
 import { PI_STANDARD_SERVICE_TIER } from "./modelCapabilities.ts";
+import { PI_TRACKING_JOURNAL_COMMAND } from "./trackingJournalExtensionSource.ts";
+import { PI_STOP_DELEGATE_COMMAND } from "./presentationExtensionSource.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 const PI_DRIVER_KIND = PI_PROVIDER;
@@ -206,6 +217,29 @@ export interface PiAdapterV2Options {
       request: ProviderContinuationRequests.ProviderContinuationRequest,
     ) => Effect.Effect<void>;
   };
+}
+
+function piGoalEventLabel(kind: string | undefined): string | undefined {
+  switch (kind) {
+    case "active":
+      return "Goal active";
+    case "continuation":
+      return "Goal continuing";
+    case "resumed":
+      return "Goal resumed";
+    case "blocked":
+      return "Goal blocked";
+    case "budget_limited":
+      return "Goal budget reached";
+    case "paused":
+      return "Goal paused";
+    case "cleared":
+      return "Goal cleared";
+    case "complete":
+      return "Goal complete";
+    default:
+      return undefined;
+  }
 }
 
 function contentText(content: unknown): string {
@@ -373,7 +407,10 @@ interface ActivePiTurn {
   messageOrdinal: number;
   readonly streamItems: Map<string, PiStreamItemState>;
   readonly toolArgs: Map<string, unknown>;
+  readonly trackedAsyncRuns: Set<string>;
+  readonly delegateCalls: Set<string>;
   readonly toolStartedAt: Map<string, DateTime.Utc>;
+  readonly nestedToolCounts: Map<string, Map<string, number>>;
   readonly commandOutputBytes: Map<string, number>;
   interrupted: boolean;
   nativeAborted: boolean;
@@ -483,9 +520,104 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       ...(payload === undefined ? {} : { payload }),
     });
 
+  // CLI --fork uses Pi's own session format and sets the destination cwd. RPC
+  // switch_session/clone alone would retain the source cwd.
+  const forkPiSessionIntoCwd = Effect.fnUntraced(function* (
+    sourceFile: string,
+    boundary: PiForkBoundary,
+    providerThreadCreatedAt: DateTime.Utc,
+    destinationCwd: string,
+  ) {
+    const launchArgs = resolvePiLaunchArgs(options.settings.launchArgs);
+    if (!launchArgs.ok) return yield* protocolError(launchArgs.message);
+    const forkLaunch = buildPiRpcLaunch({
+      launchArgs: launchArgs.args,
+      environment: options.environment,
+      mcpSession: undefined,
+      extensionPath: undefined,
+      shortLived: true,
+      disableExtensions: true,
+      disableTools: true,
+    });
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const forkConnection = yield* makePiRpcConnection({
+          command: options.settings.binaryPath || "pi",
+          args: [...forkLaunch.args, "--fork", sourceFile],
+          cwd: destinationCwd,
+          env: forkLaunch.env,
+        });
+        yield* Stream.fromQueue(forkConnection.events).pipe(
+          Stream.runDrain,
+          Effect.ignore,
+          Effect.forkScoped,
+        );
+        const beforeEntry =
+          boundary.type === "nothing"
+            ? null
+            : yield* piForkEntry(
+                boundary,
+                providerThreadCreatedAt,
+                forkConnection.request({ type: "get_entries" }),
+              );
+        if (beforeEntry !== null) {
+          const result = yield* forkConnection.request({
+            type: "fork",
+            entryId: beforeEntry,
+          });
+          if (recordField(result, "cancelled") === true) {
+            return yield* protocolError("A Pi extension cancelled the session fork");
+          }
+        }
+        const state = yield* forkConnection.request({ type: "get_state" });
+        const file = recordString(state, "sessionFile");
+        if (file === undefined || file === sourceFile) {
+          return yield* protocolError("Pi fork did not create a distinct session file");
+        }
+        return file;
+      }),
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+  });
+
+  const stageThreadRelocation = Effect.fn("PiAdapter.stageSavedThreadRelocation")(function* ({
+    providerThread,
+    cwd,
+  }: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly cwd: string;
+  }) {
+    const source = providerThread.nativeThreadRef?.nativeId;
+    if (
+      !source ||
+      providerThread.nativeThreadRef?.strength !== "strong" ||
+      providerThread.driver !== PI_PROVIDER ||
+      providerThread.providerInstanceId !== options.instanceId
+    ) {
+      return yield* protocolError("Only a saved Pi conversation can be moved");
+    }
+    const nativeId = yield* forkPiSessionIntoCwd(
+      source,
+      { type: "nothing" },
+      providerThread.createdAt,
+      cwd,
+    ).pipe(
+      Effect.mapError(() =>
+        protocolError("Pi could not stage its conversation in the destination workspace"),
+      ),
+    );
+    return {
+      ...providerThread,
+      providerSessionId: null,
+      nativeThreadRef: providerRef(nativeId),
+      status: "not_loaded" as const,
+      updatedAt: yield* DateTime.now,
+    };
+  });
+
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: options.instanceId,
     driver: PI_PROVIDER,
+    stageSavedThreadRelocation: stageThreadRelocation,
     getCapabilities: Effect.fn("PiAdapter.getCapabilities")(function () {
       return Effect.succeed(PiProviderCapabilitiesV2);
     }),
@@ -642,6 +774,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       >();
       // The launch snapshot arrives before the tool result that names its run.
       let latestAsyncSnapshotRuns: ReadonlyArray<unknown> = [];
+      const delegateStopResults = new Map<string, Deferred.Deferred<boolean>>();
+      let delegateStopNonce = 0;
       // Pi can settle immediately after dialog response; serialize so terminal cannot overtake request resolution.
       const sessionEventPermit = yield* Semaphore.make(1);
       let threadState: PiThreadState | null = null;
@@ -691,10 +825,18 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       );
       let appliedModel: string | null = null;
       let appliedThinking: string | null = null;
+      let appThinkingChoice: { model: string; effort: string | undefined } | null = null;
+      let planExitThinkingChoice: { model: string; effort: string | undefined } | null = null;
       // Pi reloads extensions (resetting the tier) on paths the adapter cannot see, so a chosen tier
       // is resent every turn; Standard sends a clear only when an earlier tier may still be set.
       let serviceTierMayBeSet = false;
       let appliedSessionName: string | null = null;
+      let nativeSessionUuid: string | null = null;
+      let lastAppTitle: string | null = null;
+      const nativeOwnsAutomaticTitle = () =>
+        sessionEntity.extensionStatuses?.some(
+          ({ key, text }) => key === "t3.pi.title-owner.v1" && text === "native",
+        ) === true;
       const outOfTurnExtensionErrors: Array<PiRpcRecord> = [];
       let lastKnownLeaf: string | null = null;
       // Failed get_entries leaves an untrustworthy turn boundary; re-sync the cursor on next capture.
@@ -800,20 +942,40 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           (rawText !== undefined && typeof rawText !== "string")
         )
           return;
+        const presentation =
+          key === PI_PRESENTATION_STATUS && typeof rawText === "string"
+            ? normalizePiPresentation(rawText)
+            : null;
+        if (key === PI_PRESENTATION_STATUS && rawText !== undefined && !presentation) return;
+        const jobs =
+          key === PI_JOBS_STATUS && typeof rawText === "string" ? normalizePiJobs(rawText) : null;
+        if (key === PI_JOBS_STATUS && rawText !== undefined && jobs === null) return;
+        if (
+          key === PI_PLAN_STATUS &&
+          rawText !== undefined &&
+          rawText !== "plan" &&
+          rawText !== "build"
+        )
+          return;
         const text =
-          typeof rawText === "string"
+          presentation ??
+          jobs ??
+          (typeof rawText === "string"
             ? NodeUtil.stripVTControlCharacters(
                 rawText.slice(0, MAX_EXTENSION_STATUS_TEXT_LENGTH * 4),
               )
                 .replaceAll(/\p{Cc}/gu, " ")
                 .trim()
                 .slice(0, MAX_EXTENSION_STATUS_TEXT_LENGTH)
-            : "";
+            : "");
         const statuses = sessionEntity.extensionStatuses ?? [];
         if (extensionStatusReset?.previous.some((status) => status.key === key)) {
           extensionStatusReset.touched.add(key);
         }
         const index = statuses.findIndex((status) => status.key === key);
+        if (key === PI_PLAN_STATUS && text === "build" && statuses[index]?.text === "plan") {
+          planExitThinkingChoice = appThinkingChoice;
+        }
         if (
           index < 0
             ? text.length === 0 || statuses.length >= MAX_EXTENSION_STATUSES
@@ -830,10 +992,32 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 : statuses.map((status) => (status.key === key ? { key, text } : status)),
         };
         yield* updateProviderSession(sessionEntity.status);
+        const state = threadState;
+        if (
+          key === PI_PLAN_STATUS &&
+          state &&
+          !registrationInProgress &&
+          (text === "plan" || text === "build") &&
+          state.providerThread.nativeMetadata?.piMode !== text
+        ) {
+          state.providerThread = {
+            ...state.providerThread,
+            nativeMetadata: { ...state.providerThread.nativeMetadata, piMode: text },
+            updatedAt: yield* DateTime.now,
+          };
+          yield* emit({
+            type: "provider_thread.updated",
+            driver: PI_PROVIDER,
+            providerThread: state.providerThread,
+            sessionScoped: state.activeTurn === null,
+          });
+        }
       });
 
       const clearExtensionStatuses = Effect.fn("PiAdapter.clearExtensionStatuses")(function* () {
         if (sessionEntity.extensionStatuses?.length === 0) return;
+        planExitThinkingChoice = null;
+        appThinkingChoice = null;
         sessionEntity = { ...sessionEntity, extensionStatuses: [] };
         yield* updateProviderSession(sessionEntity.status);
       });
@@ -1395,7 +1579,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           return;
         }
         if (phase === "start") {
+          if (parentToolCallId && !turn.toolArgs.has(toolCallId)) {
+            const counts = turn.nestedToolCounts.get(parentToolCallId) ?? new Map<string, number>();
+            counts.set(toolName, (counts.get(toolName) ?? 0) + 1);
+            turn.nestedToolCounts.set(parentToolCallId, counts);
+          }
           turn.toolArgs.set(toolCallId, event["args"]);
+          if (toolName === "delegate") turn.delegateCalls.add(toolCallId);
         }
         const args = event["args"] ?? turn.toolArgs.get(toolCallId);
         const emittedAt = yield* DateTime.now;
@@ -1450,6 +1640,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           if (fileName !== undefined) {
             const diffStr =
               recordString(recordField(resultRecord, "details"), "patch") ??
+              recordString(recordField(resultRecord, "details"), "diff") ??
               (isError && outputText.trim().length > 0 ? outputText : undefined);
             const newStr = toolName === "write" ? recordString(args, "content") : undefined;
             yield* emit({
@@ -1468,6 +1659,50 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           }
         }
         const output = piToolOutput(resultRecord, toolName);
+        const details = recordField(resultRecord, "details");
+        if (completed && toolName === "codemode") {
+          // Some codemode versions supply the nested edits only on the parent result.
+          const changes = recordField(details, "fileChanges");
+          for (const change of Array.isArray(changes) ? changes : []) {
+            const id = recordString(change, "id");
+            const name = recordString(change, "name");
+            const fileName = recordString(change, "path");
+            const state = recordString(change, "status");
+            if (
+              !id ||
+              !fileName ||
+              (name !== "edit" && name !== "write") ||
+              (state !== "ok" && state !== "error") ||
+              turn.itemOrdinals.has(id)
+            )
+              continue;
+            const diff = (
+              state === "ok" ? recordString(change, "diff") : recordString(change, "error")
+            )?.slice(0, 20_000);
+            const status = state === "ok" ? "completed" : "failed";
+            yield* emitItemNode(turn, id, "tool_call", status, startedAt, emittedAt, toolCallId);
+            yield* emit({
+              type: "turn_item.updated",
+              driver: PI_PROVIDER,
+              turnItem: {
+                ...baseItemFields(turn, id, startedAt, emittedAt, toolCallId),
+                type: "file_change",
+                title: name,
+                fileName,
+                status,
+                completedAt: emittedAt,
+                ...(diff === undefined ? {} : { diffStr: diff }),
+              },
+            });
+          }
+        }
+        const counts =
+          completed && toolName === "codemode" ? turn.nestedToolCounts.get(toolCallId) : undefined;
+        const title = counts?.size
+          ? Array.from(counts, ([name, count]) => `${count} ${name}`)
+              .join(", ")
+              .slice(0, 512)
+          : toolName;
         const readPath =
           toolName === "read"
             ? (recordString(args, "path") ?? recordString(args, "file_path"))?.trim()
@@ -1484,7 +1719,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           driver: PI_PROVIDER,
           turnItem: {
             ...shared,
-            title: toolName,
+            title,
             type: "dynamic_tool",
             ...mcpToolPresentation({ toolName }),
             toolName,
@@ -1493,8 +1728,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             ...(viewedImagePath === undefined ? {} : { viewedImagePath }),
           },
         });
-        if (toolName === "subagent") {
-          yield* emitSubagentTasks(turn, toolCallId, resultRecord, completed);
+        if (toolName === "subagent" || toolName === "delegate") {
+          yield* emitSubagentTasks(
+            turn,
+            toolCallId,
+            resultRecord,
+            completed,
+            toolName === "delegate" && !isError,
+          );
         }
       });
 
@@ -1503,12 +1744,12 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         toolCallId: string,
         resultRecord: unknown,
         completed: boolean,
+        delegated: boolean,
       ) {
         const details = recordField(resultRecord, "details");
         const results = recordField(details, "results");
-        if (!Array.isArray(results)) return;
         let emitted = false;
-        for (const [index, result] of results.entries()) {
+        for (const [index, result] of (Array.isArray(results) ? results : []).entries()) {
           const agent = recordString(result, "agent");
           const task = recordString(result, "task");
           if (agent === undefined || task === undefined) continue;
@@ -1537,8 +1778,19 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           });
         }
         // Async launches return no results; their members arrive in the subagent-async widget.
-        const asyncId = recordString(details, "asyncId");
-        if (!emitted && asyncId !== undefined && !piAsyncRuns.has(asyncId)) {
+        const asyncId =
+          recordString(details, "asyncId") ??
+          (delegated ? recordString(details, "runId") : undefined);
+        if (!emitted && asyncId !== undefined) yield* trackPiAsyncRun(turn, toolCallId, asyncId);
+      });
+
+      const trackPiAsyncRun = Effect.fnUntraced(function* (
+        turn: ActivePiTurn,
+        toolCallId: string,
+        asyncId: string,
+      ) {
+        if (!piAsyncRuns.has(asyncId) && !turn.trackedAsyncRuns.has(asyncId)) {
+          turn.trackedAsyncRuns.add(asyncId);
           const tracked = { turn, toolCallId, emitted: new Map<string, string>() };
           piAsyncRuns.set(asyncId, tracked);
           // Keeps the run ingesting after the coordinator's turn ends, until the run settles.
@@ -1564,6 +1816,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           readonly status: OrchestrationV2Subagent["status"];
           readonly progress?: string | undefined;
           readonly result: string | null;
+          readonly asyncChild?: boolean;
         },
       ) {
         const emittedAt = yield* DateTime.now;
@@ -1595,7 +1848,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             providerInstanceId: options.instanceId,
             providerThreadId: turn.turnInput.providerThread.id,
             childThreadId: null,
-            nativeTaskRef: providerRef(nativeTaskId),
+            nativeTaskRef: providerRef(nativeTaskId, task.asyncChild ? "strong" : "weak"),
             prompt: task.task,
             title: task.agent,
             model: task.model,
@@ -1617,6 +1870,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             completedAt: finished ? emittedAt : null,
             type: "subagent",
             subagentId,
+            ...(task.asyncChild && !finished ? { canStop: true as const } : {}),
             origin: "provider_native",
             driver: PI_PROVIDER,
             providerInstanceId: options.instanceId,
@@ -1647,7 +1901,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           if (agent === undefined || status === undefined) continue;
           if (status === "running" || status === "pending") childrenSettled = false;
           const model = recordString(child, "model") ?? null;
-          const key = `${status}:${model}`;
+          const activity = recordField(child, "activity");
+          const tool = recordString(activity, "currentTool");
+          const progress =
+            status === "running" && tool && /^[a-z\d_.:-]{1,80}$/i.test(tool) ? tool : undefined;
+          const key = `${status}:${model}:${progress ?? ""}`;
           if (tracked.emitted.get(id) === key) continue;
           tracked.emitted.set(id, key);
           yield* emitSubagent(tracked.turn, tracked.toolCallId, id, {
@@ -1655,7 +1913,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             task: "",
             model,
             status,
+            progress,
             result: null,
+            asyncChild: true,
           });
         }
         const runStatus = piAsyncSubagentStatus(recordString(run, "state"));
@@ -1817,6 +2077,35 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             message,
             notifyType === "warning" || notifyType === "error" ? notifyType : "info",
           );
+          return;
+        }
+        if (
+          method === "setWidget" &&
+          recordString(event, "widgetKey") === "t3.pi.delegate-launch.v1"
+        ) {
+          const lines = recordField(event, "widgetLines");
+          const line = Array.isArray(lines) && lines.length === 1 ? lines[0] : undefined;
+          const turn = threadState?.activeTurn;
+          if (!turn || typeof line !== "string" || line.length > 2048) return;
+          const launch = Option.getOrUndefined(decodePiJson(line));
+          const requestId = recordString(launch, "requestId");
+          const runId = recordString(launch, "runId");
+          if (requestId && runId && turn.delegateCalls.has(requestId))
+            yield* trackPiAsyncRun(turn, requestId, runId);
+          return;
+        }
+        if (
+          method === "setWidget" &&
+          recordString(event, "widgetKey") === "t3.pi.delegate-stop.v1"
+        ) {
+          const lines = recordField(event, "widgetLines");
+          const line = Array.isArray(lines) && lines.length === 1 ? lines[0] : undefined;
+          if (typeof line !== "string" || line.length > 512) return;
+          const result = Option.getOrUndefined(decodePiJson(line));
+          const nonce = recordString(result, "nonce");
+          const resultWaiter = nonce === undefined ? undefined : delegateStopResults.get(nonce);
+          if (resultWaiter)
+            yield* Deferred.succeed(resultWaiter, recordField(result, "success") === true);
           return;
         }
         if (method === "setWidget" && recordString(event, "widgetKey") === "subagent-async") {
@@ -2255,13 +2544,50 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         }
         // A native wake may wait for a turn owner; status belongs to the live session immediately.
         if (event["type"] === "extension_ui_request" && event["method"] === "setStatus") {
-          yield* updateExtensionStatus(event);
+          if (event["statusKey"] === "t3.pi.native-title.v1") {
+            const state = threadState;
+            const raw = recordString(event, "statusText");
+            if (
+              closed ||
+              stopRequested ||
+              runtimeRetired ||
+              unsolicitedActivityDetected ||
+              registrationInProgress ||
+              !state ||
+              !nativeSessionUuid ||
+              !raw ||
+              raw.length > 4096
+            )
+              return;
+            const data = Option.getOrUndefined(decodePiJson(raw));
+            const name = recordString(data, "title")
+              ?.replaceAll(/\p{Cc}/gu, " ")
+              .trim();
+            if (recordString(data, "id") !== nativeSessionUuid || !name || name.length > 512)
+              return;
+            if (name === appliedSessionName) return;
+            appliedSessionName = name;
+            const from = lastAppTitle;
+            lastAppTitle = name;
+            if (from === null || from === name) return;
+            const providerThread = state.providerThread;
+            yield* emit({
+              type: "provider_thread.updated",
+              driver: PI_PROVIDER,
+              providerThread,
+              nativeTitleChange: { from, to: name },
+              sessionScoped: state.activeTurn === null,
+            });
+          } else {
+            yield* updateExtensionStatus(event);
+          }
           return;
         }
         // Model hooks can show dialogs before turn ownership; keep requests session-scoped and buffer output.
         const interactiveUiRequest =
           event["type"] === "extension_ui_request" &&
-          ["select", "confirm", "input", "editor"].includes(String(event["method"]));
+          (["select", "confirm", "input", "editor"].includes(String(event["method"])) ||
+            (event["method"] === "setWidget" && event["widgetKey"] === "t3.pi.delegate-stop.v1"));
         if (
           threadState?.activeTurn === null &&
           pendingWake !== null &&
@@ -2383,8 +2709,104 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             return;
           }
           case "message_end": {
-            if (turn === null) return;
             const message = event["message"];
+            if (
+              state &&
+              recordString(message, "role") === "custom" &&
+              recordString(message, "customType") === "pi-goal-event" &&
+              recordField(message, "display") === true
+            ) {
+              const details = recordField(message, "details");
+              const kind = recordString(details, "kind");
+              const label = piGoalEventLabel(kind);
+              const nativeGoal = recordField(details, "goal");
+              const decoded = decodePiGoal(nativeGoal);
+              if (kind === "cleared" || Option.isSome(decoded)) {
+                const goal = kind === "cleared" ? null : Option.getOrNull(decoded);
+                state.providerThread = {
+                  ...state.providerThread,
+                  goal,
+                  updatedAt: yield* DateTime.now,
+                };
+                yield* emit({
+                  type: "provider_thread.updated",
+                  driver: PI_PROVIDER,
+                  providerThread: state.providerThread,
+                  sessionScoped: turn === null,
+                });
+              }
+              if (label && turn)
+                yield* emitSystemNotice(
+                  turn,
+                  `pi-goal:${turn.providerTurn.id}:${turn.nextItemOrdinal}`,
+                  label,
+                );
+              return;
+            }
+            if (turn === null) return;
+            if (
+              recordString(message, "role") === "custom" &&
+              recordString(message, "customType") === "plan-document" &&
+              recordField(message, "display") === true
+            ) {
+              const markdown = recordString(message, "content");
+              if (!markdown?.trim()) return;
+              const now = yield* DateTime.now;
+              const nativeItemId = `plan-document:${turn.providerTurn.id}:${turn.nextItemOrdinal}`;
+              const planId = yield* idAllocator.allocate.plan({
+                driver: PI_PROVIDER,
+                threadId: turn.turnInput.threadId,
+                runId: turn.turnInput.runId,
+              });
+              const base = baseItemFields(turn, nativeItemId, now, now);
+              yield* emitItemNode(turn, nativeItemId, "plan", "completed", now, now);
+              yield* emit({
+                type: "plan.updated",
+                driver: PI_PROVIDER,
+                plan: {
+                  id: planId,
+                  threadId: base.threadId,
+                  runId: base.runId,
+                  nodeId: base.nodeId,
+                  kind: "proposed_plan",
+                  status: "completed",
+                  markdown,
+                },
+              });
+              yield* emit({
+                type: "turn_item.updated",
+                driver: PI_PROVIDER,
+                turnItem: {
+                  ...base,
+                  type: "proposed_plan",
+                  status: "completed",
+                  completedAt: now,
+                  title: null,
+                  planId,
+                  markdown,
+                  streaming: false,
+                },
+              });
+              return;
+            }
+            if (
+              recordString(message, "role") === "custom" &&
+              recordString(message, "customType") === "lean-job-complete" &&
+              recordField(message, "display") === true
+            ) {
+              const heading = recordString(message, "content")?.split("\n", 1)[0] ?? "";
+              const match = /^(shell|subagent) job [a-z\d_.:-]+ (completed|cancelled)\.$/i.exec(
+                heading,
+              );
+              if (match) {
+                yield* emitSystemNotice(
+                  turn,
+                  `pi-job:${turn.providerTurn.id}:${turn.nextItemOrdinal}`,
+                  `${match[1] === "shell" ? "Shell job" : "Subagent job"} ${match[2]}.`,
+                );
+              }
+              return;
+            }
             if (recordString(message, "role") !== "assistant") return;
             yield* completeOpenStreamItems(turn);
             const reportedProvider = recordString(message, "provider");
@@ -2928,61 +3350,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         }
       });
 
-      // CLI --fork uses Pi's own session format and sets the destination cwd. RPC
-      // switch_session/clone alone would retain the source cwd.
-      const forkSessionIntoCwd = Effect.fnUntraced(function* (
-        sourceFile: string,
+      const forkSessionIntoCwd = (
+        source: string,
         boundary: PiForkBoundary,
-        providerThreadCreatedAt: DateTime.Utc,
-      ) {
-        const forkLaunch = buildPiRpcLaunch({
-          launchArgs: resolvedLaunchArgs.args,
-          environment: options.environment,
-          mcpSession: undefined,
-          extensionPath: undefined,
-          shortLived: true,
-          disableExtensions: true,
-          disableTools: true,
-        });
-        return yield* Effect.scoped(
-          Effect.gen(function* () {
-            const forkConnection = yield* makePiRpcConnection({
-              command: options.settings.binaryPath || "pi",
-              args: [...forkLaunch.args, "--fork", sourceFile],
-              cwd,
-              env: forkLaunch.env,
-            });
-            yield* Stream.fromQueue(forkConnection.events).pipe(
-              Stream.runDrain,
-              Effect.ignore,
-              Effect.forkScoped,
-            );
-            const beforeEntry =
-              boundary.type === "nothing"
-                ? null
-                : yield* piForkEntry(
-                    boundary,
-                    providerThreadCreatedAt,
-                    forkConnection.request({ type: "get_entries" }),
-                  );
-            if (beforeEntry !== null) {
-              const result = yield* forkConnection.request({
-                type: "fork",
-                entryId: beforeEntry,
-              });
-              if (recordField(result, "cancelled") === true) {
-                return yield* protocolError("A Pi extension cancelled the session fork");
-              }
-            }
-            const state = yield* forkConnection.request({ type: "get_state" });
-            const file = recordString(state, "sessionFile");
-            if (file === undefined || file === sourceFile) {
-              return yield* protocolError("Pi fork did not create a distinct session file");
-            }
-            return file;
-          }),
-        ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
-      });
+        createdAt: DateTime.Utc,
+      ) => forkPiSessionIntoCwd(source, boundary, createdAt, cwd);
 
       // Old records hold entry IDs without a session file. Recover only when both
       // timestamped user entries are on the same branch in a sibling session.
@@ -3107,6 +3479,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             appliedModel = null;
             appliedThinking = null;
             appliedSessionName = null;
+            lastAppTitle = null;
             baselineModel = null;
             baselineThinking = null;
             contextWindow = null;
@@ -3124,6 +3497,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             stateData = undefined;
           }
           stateData ??= yield* request({ type: "get_state" });
+          nativeSessionUuid = recordString(stateData, "sessionId") ?? null;
+          appliedSessionName = recordString(stateData, "sessionName") ?? null;
           if (discoveredModels === null) yield* discoverModels();
           contextWindow = rememberModelContextWindow(recordField(stateData, "model"));
           // Capture each baseline before applying selections so our own choices cannot become Pi defaults.
@@ -3203,13 +3578,27 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           );
           lastKnownLeaf = recordString(baselineEntries, "leafId") ?? null;
           leafCursorStale = baselineEntries === undefined;
+          const restoredGoal = piBranchGoal(baselineEntries);
+          const mode = sessionEntity.extensionStatuses?.find(
+            ({ key }) => key === PI_PLAN_STATUS,
+          )?.text;
+          const attached = {
+            ...providerThread,
+            ...(restoredGoal === undefined ? {} : { goal: restoredGoal }),
+            ...(mode !== "plan" && mode !== "build"
+              ? {}
+              : {
+                  nativeMetadata: { ...providerThread.nativeMetadata, piMode: mode },
+                }),
+          };
+          threadState.providerThread = attached;
           if (publish)
             yield* emit({
               type: "provider_thread.updated",
               driver: PI_PROVIDER,
-              providerThread,
+              providerThread: attached,
             });
-          return providerThread;
+          return attached;
         },
         (effect) =>
           Effect.acquireUseRelease(
@@ -3228,22 +3617,33 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       );
 
       const applySelection = Effect.fnUntraced(function* (modelSelection: ModelSelection) {
+        const planActive = sessionEntity.extensionStatuses?.some(
+          ({ key, text }) => key === PI_PLAN_STATUS && text === "plan",
+        );
         const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
+        const keepBuildThinking =
+          planExitThinkingChoice?.model === modelSelection.model &&
+          planExitThinkingChoice.effort === thinking;
+        if (!keepBuildThinking) planExitThinkingChoice = null;
+        appThinkingChoice = { model: modelSelection.model, effort: thinking };
         // pi.setModel and /preset can change the model without an RPC event.
         // Confirm cached selections against Pi before skipping them.
         const modelCached =
           modelSelection.model !== PI_INHERIT_MODEL_SLUG && modelSelection.model === appliedModel;
         let modelDrifted = false;
-        if (modelCached || (thinking !== undefined && thinking === appliedThinking)) {
+        if (planActive || modelCached || (thinking !== undefined && thinking === appliedThinking)) {
           const state = yield* request({ type: "get_state" });
           const stateModel = recordField(state, "model");
           const piModel = `${recordString(stateModel, "provider")}/${recordString(stateModel, "id")}`;
           modelDrifted = modelCached && piModel !== appliedModel;
           appliedThinking = recordString(state, "thinkingLevel") ?? null;
         }
+        const planThinking = planActive ? appliedThinking : null;
+        let modelChanged = false;
         if (modelSelection.model === PI_INHERIT_MODEL_SLUG) {
           if (appliedModel !== null && baselineModel !== null) {
             const restoredModel = yield* request({ type: "set_model", ...baselineModel });
+            modelChanged = true;
             appliedThinking = null;
             contextWindow = rememberModelContextWindow(restoredModel);
             appliedModel = null;
@@ -3256,6 +3656,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             });
           }
           if (
+            !planActive &&
+            !keepBuildThinking &&
             thinking === undefined &&
             baselineThinking !== null &&
             appliedThinking !== baselineThinking
@@ -3274,12 +3676,29 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               `Pi model '${modelSelection.model}' must use provider/model format`,
             );
           }
-          const selectedModel = yield* request({
-            type: "set_model",
-            provider: parsed.provider,
-            modelId: parsed.modelId,
-          });
+          const select = (target: typeof parsed) => request({ type: "set_model", ...target });
+          const selectedModel = yield* select(parsed).pipe(
+            Effect.catchTag("PiRpcError", (error) => {
+              if (
+                error.operation !== "set_model" ||
+                !error.detail?.startsWith("Model not found:")
+              ) {
+                return Effect.fail(error);
+              }
+              // The status probe and live session are separate processes. Give the latter
+              // the same bounded startup window before declaring a selection unavailable.
+              return Effect.sleep(PI_MODEL_REGISTRATION_GRACE_MS).pipe(
+                Effect.andThen(discoverModels()),
+                Effect.andThen(
+                  Effect.suspend(() =>
+                    select(resolvePiModelSlug(modelSelection.model, discoveredModels) ?? parsed),
+                  ),
+                ),
+              );
+            }),
+          );
           // Pi resets thinking to the target model's configured default on set_model.
+          modelChanged = true;
           appliedThinking = null;
           contextWindow = rememberModelContextWindow(selectedModel);
           appliedModel = modelSelection.model;
@@ -3291,7 +3710,12 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             providerSession: sessionEntity,
           });
         }
+        if (modelChanged && planThinking !== null && PI_THINKING_LEVELS.has(planThinking)) {
+          yield* request({ type: "set_thinking_level", level: planThinking });
+        }
         if (
+          !planActive &&
+          !keepBuildThinking &&
           thinking !== undefined &&
           thinking !== appliedThinking &&
           PI_THINKING_LEVELS.has(thinking)
@@ -3345,6 +3769,28 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         return { message, images };
       });
 
+      // Lean clears its live count when the last shell settles. Replayed journal entries
+      // may still say running and cannot be used to keep the process open.
+      const hasLiveShellJobs = () =>
+        !closed &&
+        !stopRequested &&
+        sessionEntity.extensionStatuses?.some(
+          ({ key, text }) =>
+            key === "lean-jobs" && /^[1-9]\d* shells?(?: · [1-9]\d* subagents?)?$/.test(text),
+        ) === true;
+
+      const applyPiSessionName = Effect.fnUntraced(function* (title: string) {
+        const previous = appliedSessionName;
+        appliedSessionName = title;
+        yield* request({ type: "set_session_name", name: title }).pipe(
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              if (appliedSessionName === title) appliedSessionName = previous;
+            }),
+          ),
+        );
+      });
+
       const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
         instanceId: options.instanceId,
         driver: PI_PROVIDER,
@@ -3354,10 +3800,12 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         },
         events: Stream.fromQueue(events),
         backgroundTasksEndWithProcess: true,
-        hasPendingBackgroundWork: Effect.sync(() => pendingWake !== null),
+        hasPendingBackgroundWork: Effect.sync(() => pendingWake !== null || hasLiveShellJobs()),
         hasPendingBackgroundWorkForThread: (providerThread) =>
           Effect.sync(
-            () => pendingWake !== null && pendingWake.state.providerThread.id === providerThread.id,
+            () =>
+              (pendingWake !== null && pendingWake.state.providerThread.id === providerThread.id) ||
+              (threadState?.providerThread.id === providerThread.id && hasLiveShellJobs()),
           ),
         getModelContextWindow: (selection) => {
           if (selection.instanceId !== options.instanceId) return undefined;
@@ -3398,6 +3846,118 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 }),
             ),
           ),
+        applyThreadTitle: Effect.fn("PiAdapter.applyThreadTitle")(function* ({
+          providerThread,
+          title,
+          manuallyRenamed,
+        }) {
+          const state = threadState;
+          if (
+            closed ||
+            stopRequested ||
+            registrationInProgress ||
+            !state ||
+            state.providerThread.id !== providerThread.id ||
+            !isLiveSessionOf(state, providerThread.nativeThreadRef?.nativeId)
+          )
+            return;
+          lastAppTitle = title;
+          if (!manuallyRenamed && nativeOwnsAutomaticTitle()) return;
+          yield* applyPiSessionName(title).pipe(
+            Effect.mapError(() => protocolError("Pi could not rename the active session")),
+          );
+        }),
+        stageThreadRelocation: Effect.fn("PiAdapter.stageThreadRelocation")(function* ({
+          providerThread,
+          cwd: destinationCwd,
+        }) {
+          const source = providerThread.nativeThreadRef?.nativeId;
+          const state = threadState;
+          if (
+            !source ||
+            !state ||
+            closed ||
+            stopRequested ||
+            registrationInProgress ||
+            rollbackBarrier !== null ||
+            state.providerThread.id !== providerThread.id ||
+            !isLiveSessionOf(state, source) ||
+            state.activeTurn !== null ||
+            pendingWake !== null ||
+            hasLiveShellJobs() ||
+            piAsyncRuns.size > 0
+          ) {
+            return yield* protocolError("Only an idle attached Pi session can be moved");
+          }
+          const staged = yield* stageThreadRelocation({
+            providerThread: state.providerThread,
+            cwd: destinationCwd,
+          });
+          if (
+            threadState !== state ||
+            state.activeTurn !== null ||
+            pendingWake !== null ||
+            hasLiveShellJobs() ||
+            piAsyncRuns.size > 0
+          ) {
+            return yield* protocolError("The Pi source session changed during relocation");
+          }
+          return staged;
+        }),
+        stopSubagent: Effect.fn("PiAdapter.stopSubagent")(function* ({
+          providerThread,
+          nativeTaskId,
+          requestedAt,
+        }) {
+          const state = threadState;
+          if (
+            closed ||
+            stopRequested ||
+            !state ||
+            state.providerThread.id !== providerThread.id ||
+            !isLiveSessionOf(state, providerThread.nativeThreadRef?.nativeId)
+          ) {
+            return yield* protocolError("The Pi subagent's session is not active");
+          }
+          for (const [runId, tracked] of piAsyncRuns) {
+            if (tracked.turn.turnInput.providerThread.id !== providerThread.id) continue;
+            const prefix = tracked.toolCallId + ":subagent:";
+            if (!nativeTaskId.startsWith(prefix)) continue;
+            const childId = nativeTaskId.slice(prefix.length);
+            const status = tracked.emitted.get(childId);
+            if (!status || !/^(pending|running|waiting):/.test(status)) continue;
+            const startedAt = tracked.turn.toolStartedAt.get(nativeTaskId);
+            if (
+              requestedAt &&
+              startedAt &&
+              DateTime.toEpochMillis(startedAt) > DateTime.toEpochMillis(requestedAt)
+            )
+              return;
+            const nonce = String(delegateStopNonce++);
+            const reply = yield* Deferred.make<boolean>();
+            delegateStopResults.set(nonce, reply);
+            const stopped = yield* Effect.gen(function* () {
+              const response = yield* request(
+                {
+                  type: "prompt",
+                  message: [`/${PI_STOP_DELEGATE_COMMAND}`, nonce, runId, childId].join(" "),
+                },
+                2_000,
+              );
+              if (recordString(response, "disposition") !== "handled") return false;
+              const result = yield* Deferred.await(reply).pipe(Effect.timeoutOption(2_000));
+              return Option.getOrElse(result, () => false);
+            }).pipe(
+              Effect.ensuring(Effect.sync(() => delegateStopResults.delete(nonce))),
+              Effect.orElseSucceed(() => false),
+            );
+            if (!stopped) return yield* protocolError("Pi could not stop the selected subagent");
+            return;
+          }
+          return yield* protocolError(
+            "Pi no longer reports that subagent as running in this session",
+          );
+        }),
         compactThread: (turnInput) =>
           runtime.startTurn({
             ...turnInput,
@@ -3429,21 +3989,41 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (!isLiveSessionOf(state, turnInput.providerThread.nativeThreadRef?.nativeId)) {
               return yield* protocolError("Pi turn requested for a different native session");
             }
+            if (/^\/move(?:\s|$)/.test(turnInput.message.text.trimStart())) {
+              return yield* protocolError(
+                "Move a saved Pi conversation using /move from its T3 composer.",
+              );
+            }
+            if (
+              /^\/plan(?:\s|$)/.test(turnInput.message.text.trimStart()) &&
+              turnInput.message.createdBy === "user" &&
+              turnInput.message.attachments.length === 0
+            ) {
+              const inventory = yield* request({ type: "get_commands" });
+              const commands = recordField(inventory, "commands");
+              if (
+                !Array.isArray(commands) ||
+                !commands.some(
+                  (command) =>
+                    recordString(command, "name") === "plan" &&
+                    recordString(command, "source") === "extension",
+                )
+              ) {
+                return yield* protocolError("The current Pi session has no native Plan extension");
+              }
+            }
             // Fork adoption uses the orchestrator-allocated row; preserve that identity in later updates.
             const continuation =
               turnInput.message.createdBy === "agent" &&
               turnInput.message.creationSource === "provider";
             if (!continuation) yield* applySelection(turnInput.modelSelection);
-            if (turnInput.appThread.title !== appliedSessionName) {
-              yield* request({
-                type: "set_session_name",
-                name: turnInput.appThread.title,
-              }).pipe(
-                Effect.tap(() =>
-                  Effect.sync(() => (appliedSessionName = turnInput.appThread.title)),
-                ),
-                Effect.ignore,
-              );
+            lastAppTitle = turnInput.appThread.title;
+            if (
+              (appliedSessionName === null && !nativeOwnsAutomaticTitle()) ||
+              (turnInput.appThread.titleRenamed === true &&
+                turnInput.appThread.title !== appliedSessionName)
+            ) {
+              yield* applyPiSessionName(turnInput.appThread.title).pipe(Effect.ignore);
             }
             // Resolve attachments before turn installation so failures cannot strand activeTurn.
             // Inject instructions through before_agent_start; wrapping user text breaks slash-command expansion.
@@ -3452,7 +4032,16 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               : parsePiCompactCommand(turnInput.message.text);
             const payload =
               !continuation && compactCommand === null
-                ? yield* resolvePromptPayload(turnInput.message.text, turnInput.message.attachments)
+                ? yield* resolvePromptPayload(
+                    turnInput.piRedirect
+                      ? turnInput.message.text +
+                          "\n\nApply this update, then continue the interrupted task unless asked to stop, pause, or switch tasks."
+                      : turnInput.message.text.trim() === "/track-journal" &&
+                          turnInput.message.attachments.length === 0
+                        ? `/${PI_TRACKING_JOURNAL_COMMAND}`
+                        : turnInput.message.text,
+                    turnInput.message.attachments,
+                  )
                 : null;
             const startedAt = yield* DateTime.now;
             const syntheticNativeTurnId = `${state.providerThread.id}:attempt:${turnInput.attemptId}`;
@@ -3482,7 +4071,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               messageOrdinal: 0,
               streamItems: new Map(),
               toolArgs: new Map(),
+              trackedAsyncRuns: new Set(),
+              delegateCalls: new Set(),
               toolStartedAt: new Map(),
+              nestedToolCounts: new Map(),
               commandOutputBytes: new Map(),
               interrupted: false,
               nativeAborted: false,
@@ -3665,7 +4257,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         ),
         interruptTurn: Effect.fn("PiAdapter.interruptTurn")(
           function* (interruptInput) {
-            const turn = threadState?.activeTurn ?? null;
+            const state = threadState;
+            const turn = state?.activeTurn ?? null;
             if (turn === null && interruptInput.requestRuntimeRestart === true) {
               if (pendingWake !== null)
                 yield* sessionEventPermit.withPermits(1)(stopPendingWake(pendingWake));
@@ -3675,7 +4268,54 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               return yield* protocolError(`Pi turn ${interruptInput.providerTurnId} is not active`);
             }
             turn.interrupted = true;
+            // The native goal queues another turn on agent_end. Pause before clearing its queue.
+            let goalNeedsRuntimeStop = false;
+            if (state?.providerThread.goal?.status === "active") {
+              const paused = yield* Effect.gen(function* () {
+                const inventory = yield* request({ type: "get_commands" }, 2_000);
+                const commands = recordField(inventory, "commands");
+                if (
+                  threadState !== state ||
+                  state.activeTurn !== turn ||
+                  !Array.isArray(commands) ||
+                  !commands.some(
+                    (command) =>
+                      recordString(command, "name") === "goal" &&
+                      recordString(command, "source") === "extension",
+                  )
+                )
+                  return false;
+                const result = yield* request({ type: "prompt", message: "/goal pause" }, 2_000);
+                if (recordString(result, "disposition") !== "handled") return false;
+                // While streaming, Pi can queue the pause marker; clear_queue removes it
+                // but the native pause is already persisted on the branch.
+                const entries = yield* request({ type: "get_entries" }, 2_000);
+                const goal = piBranchGoal(entries);
+                if (threadState !== state || goal?.status !== "paused") return false;
+                yield* sessionEventPermit.withPermits(1)(
+                  Effect.gen(function* () {
+                    if (threadState !== state || state.providerThread.goal?.status === "paused")
+                      return;
+                    state.providerThread = {
+                      ...state.providerThread,
+                      goal,
+                      updatedAt: yield* DateTime.now,
+                    };
+                    yield* emit({
+                      type: "provider_thread.updated",
+                      driver: PI_PROVIDER,
+                      providerThread: state.providerThread,
+                      sessionScoped: state.activeTurn === null,
+                    });
+                  }),
+                );
+                return true;
+              }).pipe(Effect.orElseSucceed(() => false));
+              goalNeedsRuntimeStop = !paused;
+            }
+            if (threadState !== state || state?.activeTurn !== turn) return;
             if (
+              goalNeedsRuntimeStop ||
               interruptInput.requestRuntimeRestart === true ||
               turn.settleWhenIdle ||
               turn.activeCompaction !== null ||
@@ -3684,7 +4324,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             ) {
               // Generic abort misses manual compaction; terminate so Stop covers /compact and recovery.
               stopRequested = true;
-              if (interruptInput.requestRuntimeRestart === true && !turn.settleWhenIdle) {
+              if (
+                interruptInput.requestRuntimeRestart === true &&
+                !goalNeedsRuntimeStop &&
+                !turn.settleWhenIdle
+              ) {
                 yield* clearNativeQueue(turn);
                 yield* request({ type: "abort" }, 2_000).pipe(Effect.ignore);
               }
@@ -3989,10 +4633,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                       lastNativeThreadId = forkSessionFile;
                       appliedModel = null;
                       appliedThinking = null;
-                      appliedSessionName = null;
+                      appliedSessionName = recordString(forkState, "sessionName") ?? null;
+                      nativeSessionUuid = recordString(forkState, "sessionId") ?? null;
+                      lastAppTitle = null;
                       lastKnownLeaf = leafId;
                       leafCursorStale = entriesData === undefined;
+                      const restoredGoal = piBranchGoal(entriesData);
                       yield* updateProviderThread(state, {
+                        ...(restoredGoal === undefined ? {} : { goal: restoredGoal }),
                         nativeThreadRef: providerRef(forkSessionFile),
                         nativeConversationHeadRef: leafId === null ? null : providerRef(leafId),
                       });
@@ -4124,8 +4772,40 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
 
 const decodeSessionLine = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
+const decodeGoal = Schema.decodeUnknownOption(OrchestrationV2ProviderGoal);
+
+function decodePiGoal(goal: unknown) {
+  return decodeGoal({
+    objective: recordString(goal, "objective")?.slice(0, 4096),
+    status: recordString(goal, "status"),
+    tokensUsed: recordField(goal, "tokensUsed"),
+    tokenBudget: recordField(goal, "tokenBudget"),
+    timeUsedSeconds: recordField(goal, "timeUsedSeconds"),
+  });
+}
+
+function piBranchGoal(data: unknown): OrchestrationV2ProviderGoal | null | undefined {
+  const listing = piSessionListing(data);
+  if (!listing) return undefined;
+  const seen = new Set<string>();
+  let id = listing.leafId;
+  while (id !== null) {
+    if (seen.has(id)) return undefined;
+    seen.add(id);
+    const entry = listing.entries.get(id);
+    if (!entry) return undefined;
+    if (entry.rawGoal !== undefined) {
+      if (entry.rawGoal === null) return null;
+      return Option.getOrUndefined(decodePiGoal(entry.rawGoal));
+    }
+    id = entry.parentId;
+  }
+  return null;
+}
+
 interface PiSessionEntry {
   readonly parentId: string | null;
+  readonly rawGoal?: unknown;
   readonly isUserMessage: boolean;
   /** Pi's `timestamp` as epoch milliseconds; null when missing or unparsable. */
   readonly timestamp: number | null;
@@ -4164,6 +4844,10 @@ function readPiSessionEntry(entry: unknown): [string, PiSessionEntry] | null {
     id,
     {
       parentId,
+      ...(recordString(entry, "type") === "custom" &&
+      recordString(entry, "customType") === "pi-goal"
+        ? { rawGoal: recordField(recordField(entry, "data"), "goal") }
+        : {}),
       isUserMessage:
         recordField(entry, "type") === "message" &&
         recordString(recordField(entry, "message"), "role") === "user",
@@ -4401,6 +5085,16 @@ function piQuestion(
   const detail = [recordString(event, "message"), recordString(event, "placeholder")].find(
     (text) => text !== undefined && text.trim().length > 0,
   );
+  const journalPrefix = "T3_PI_TRACK_JOURNAL\n";
+  if (method === "select" && title.startsWith(journalPrefix)) {
+    return {
+      id: questionId,
+      header: "Tracking journal",
+      question: title.slice(journalPrefix.length),
+      options,
+      allowCustomAnswer: false,
+    };
+  }
   const questionTitle = title.trim() ? title : "Question";
   return {
     id: questionId,
@@ -4460,8 +5154,21 @@ function piAskUserSingleSelectQuestion(
   const sentinel = lines.at(-1);
   if (typeof sentinel !== "string") return undefined;
   for (const args of toolArgs.values()) {
-    const questions = rpivDecoded(recordField(args, "questions"), Array.isArray);
-    if (!Array.isArray(questions)) continue;
+    const encodedQuestions = rpivDecoded(recordField(args, "questions"), Array.isArray);
+    const singleOptions = recordField(args, "options");
+    const questions = Array.isArray(encodedQuestions)
+      ? encodedQuestions
+      : Array.isArray(singleOptions) && recordString(args, "question") !== undefined
+        ? [
+            {
+              question: recordString(args, "question"),
+              options: singleOptions.map((option) => ({
+                label: recordString(option, "label"),
+                description: recordString(option, "description") ?? "",
+              })),
+            },
+          ]
+        : [];
     for (const entry of questions) {
       const question = rpivDecoded(entry, Predicate.isObject);
       const text = rpivField(question, "question");

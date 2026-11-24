@@ -273,7 +273,12 @@ export const layer: Layer.Layer<
         if (!providerThread?.providerSessionId) return;
         const session = yield* sessions.get(providerThread.providerSessionId);
         if (Option.isNone(session) || session.value.applyThreadTitle === undefined) return;
-        yield* session.value.applyThreadTitle({ providerThread, title: input.title });
+        if (thread.title !== input.title) return;
+        yield* session.value.applyThreadTitle({
+          providerThread,
+          title: input.title,
+          manuallyRenamed: thread.titleRenamed === true,
+        });
       }),
       interrupt: Effect.fn("ProviderTurnControlService.interrupt")(
         function* (input) {

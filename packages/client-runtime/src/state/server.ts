@@ -1742,6 +1742,10 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
       },
     }),
+    probeLocalInference: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:probe-local-inference",
+      tag: WS_METHODS.serverProbe,
+    }),
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",
       tag: WS_METHODS.serverRefreshProviders,

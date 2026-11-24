@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -18,6 +19,8 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import type { PiSettings } from "../settings.ts";
 import { PiDriver } from "./driver.ts";
+
+const refreshCatalog = (refresh: Effect.Effect<void>) => TestClock.withLive(refresh);
 
 const layerTest = Layer.mergeAll(
   TestProviderHost.layer({
@@ -184,7 +187,7 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
           ["--offline"],
         );
       }
-    }),
+    }).pipe(TestClock.withLive),
   );
 
   it.effect("does not run a disabled provider's workspace probe", () =>
@@ -220,7 +223,7 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
         const instance = yield* create().pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         );
-        yield* instance.snapshot.refresh;
+        yield* refreshCatalog(instance.snapshot.refresh);
         const snapshot = yield* instance.snapshot.getSnapshot;
         assert.deepEqual(
           snapshot.models.map((model) => [
@@ -249,7 +252,7 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
         const instance = yield* create().pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         );
-        yield* instance.snapshot.refresh;
+        yield* refreshCatalog(instance.snapshot.refresh);
         assert.isDefined(instance.snapshotForCwd);
         const error = yield* Effect.flip(instance.snapshotForCwd!("/failed"));
         assert.equal(error._tag, "ProviderDriverError");

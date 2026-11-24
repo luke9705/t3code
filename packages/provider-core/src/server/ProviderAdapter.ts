@@ -119,6 +119,8 @@ export const ProviderAdapterV2Event = Schema.Union([
     /** Persist idle background snapshots before a run subscriber exists. */
     sessionScoped: Schema.optional(Schema.Boolean),
     retainedNativeTurnIds: Schema.optional(Schema.Array(Schema.String)),
+    /** Compare-and-set from the title last observed by this session. */
+    nativeTitleChange: Schema.optional(Schema.Struct({ from: Schema.String, to: Schema.String })),
   }),
   /** The agent changed selected options itself, such as leaving plan mode once its plan ran. */
   Schema.Struct({
@@ -591,6 +593,7 @@ export interface ProviderAdapterV2TurnInput {
   readonly runId: RunId;
   readonly runOrdinal: number;
   readonly nativeThreadHasTurns?: boolean;
+  readonly piRedirect?: true;
   readonly providerTurnOrdinal: number;
   readonly restartContinuationOfRunId?: RunId;
   readonly resume?: true;
@@ -827,6 +830,7 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly applyThreadTitle?: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly title: string;
+    readonly manuallyRenamed?: boolean;
   }) => Effect.Effect<void, ProviderAdapterV2Error>;
   readonly stopTask?: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
@@ -844,6 +848,11 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly interruptTurn: (
     input: ProviderAdapterV2InterruptInput,
   ) => Effect.Effect<void, ProviderAdapterV2Error>;
+  /** Stages native history in a new cwd without changing the live source session. */
+  readonly stageThreadRelocation?: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly cwd: string;
+  }) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;
   readonly stopSubagent?: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly nativeTaskId: string;
@@ -887,6 +896,10 @@ export class ProviderAdapterV2 extends Context.Service<
      * skips its own check, which only knows the version from the last status probe.
      */
     readonly checksVersionAtHandshake?: boolean;
+    /** Stages a saved conversation when no live runtime owns the source. */
+    readonly stageSavedThreadRelocation?: NonNullable<
+      ProviderAdapterV2SessionRuntime["stageThreadRelocation"]
+    >;
     readonly getCapabilities: () => Effect.Effect<
       OrchestrationV2ProviderCapabilities,
       ProviderAdapterV2Error

@@ -29,6 +29,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import {
   makePiRpcConnection,
+  PI_MODEL_REGISTRATION_GRACE_MS,
   PiRpcError,
   PiRpcTimeoutError,
   piRecordField as recordField,
@@ -194,10 +195,19 @@ const readPiInventory = Effect.fn("PiProviderStatus.readPiInventory")(function* 
 ) {
   const connection = yield* makePiDiscoveryConnection(piSettings, environment, launchArgs, cwd);
   const stateData = yield* connection.request({ type: "get_state" }, timeoutMs);
-  const modelsData = yield* connection.request({ type: "get_available_models" }, timeoutMs);
-  const commandsData = yield* connection
-    .request({ type: "get_commands" }, timeoutMs)
-    .pipe(Effect.orElseSucceed(() => undefined));
+  // Session startup may launch an asynchronous provider catalog request. In particular,
+  // Kapitsa deliberately doesn't await its 1.5-second catalog fetch in session_start.
+  const [modelsData, commandsData] = yield* Effect.all(
+    [
+      Effect.sleep(PI_MODEL_REGISTRATION_GRACE_MS).pipe(
+        Effect.andThen(connection.request({ type: "get_available_models" }, timeoutMs)),
+      ),
+      connection
+        .request({ type: "get_commands" }, timeoutMs)
+        .pipe(Effect.orElseSucceed(() => undefined)),
+    ],
+    { concurrency: 2 },
+  );
   return { stateData, modelsData, commandsData };
 }, Effect.scoped);
 

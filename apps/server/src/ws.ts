@@ -109,6 +109,9 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientResponse,
   HttpRouter,
   HttpServerRequest,
   HttpServerRespondable,
@@ -2426,8 +2429,25 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
-        [WS_METHODS.serverProbe]: (_input) =>
-          Effect.map(DateTime.now, (now) => ({ serverTime: DateTime.formatIso(now) })),
+        [WS_METHODS.serverProbe]: (input) =>
+          Effect.gen(function* () {
+            const serverTime = DateTime.formatIso(yield* DateTime.now);
+            if (input.localInference !== "omlx") return { serverTime };
+            const omlxRunning = yield* HttpClient.get("http://127.0.0.1:8080/health").pipe(
+              Effect.flatMap(HttpClientResponse.filterStatusOk),
+              Effect.flatMap(
+                HttpClientResponse.schemaBodyJson(
+                  Schema.Struct({ status: Schema.Literal("healthy") }),
+                ),
+              ),
+              Effect.as(true),
+              Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
+              Effect.provide(FetchHttpClient.layer),
+              Effect.timeout("2 seconds"),
+              Effect.orElseSucceed(() => false),
+            );
+            return { serverTime, omlxRunning };
+          }),
         [WS_METHODS.serverGetConfig]: (_input) =>
           loadServerConfig({
             usageLimitsCommand: false,

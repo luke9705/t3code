@@ -36,6 +36,14 @@ import { useThreadLifecycle } from "./chat/useThreadLifecycle";
 import { useRightPanelActions } from "./chat/useRightPanelActions";
 import { type TerminalLaunchContext, useChatTerminalActions } from "./chat/useChatTerminalActions";
 import { useComposerSend } from "./chat/useComposerSend";
+import { PiComposerFooter } from "./chat/PiComposerFooter";
+import { PiColorsDialog, piColorsStyle, usePiColors } from "./chat/PiColorsDialog";
+import {
+  decodePiJobs,
+  PI_JOBS_STATUS,
+  PI_PLAN_STATUS,
+  PI_PRESENTATION_STATUS,
+} from "@t3tools/shared/piPresentation";
 import { useComposerResume } from "./chat/useComposerResume";
 import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
@@ -1580,6 +1588,37 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadLiveTokenUsage,
     activeProviderThread,
   );
+  const [piInspectorThread, setPiInspectorThread] = useState<ThreadId | null>(null);
+  const openPiContextInspector = useStableCallback(() => setPiInspectorThread(threadId));
+  const onPiInspectorOpenChange = useStableCallback((open: boolean) =>
+    setPiInspectorThread(open ? threadId : null),
+  );
+  const [piColors, setPiColors] = usePiColors();
+  const [piColorThread, setPiColorThread] = useState<ThreadId | null>(null);
+  const openPiColors = useStableCallback(() => setPiColorThread(threadId));
+  const piStatuses =
+    selectedProvider === "pi" ? deriveProviderExtensionStatuses(serverProjection) : [];
+  const piStatistics = piStatuses.find(({ key }) => key === PI_PRESENTATION_STATUS)?.text;
+  const piJobsStatus = piStatuses.find(({ key }) => key === PI_JOBS_STATUS)?.text;
+  const piJobs = piJobsStatus === undefined ? null : decodePiJobs(piJobsStatus);
+  const [piJobsDialog, setPiJobsDialog] = useState<{
+    readonly threadKey: string;
+    readonly shellOnly: boolean;
+  } | null>(null);
+  const onPiJobsOpenChange = useStableCallback((open: boolean) =>
+    setPiJobsDialog(open ? { threadKey: routeThreadKey, shellOnly: false } : null),
+  );
+  const inspectPiShells = useStableCallback(() => {
+    setPiJobsDialog({ threadKey: routeThreadKey, shellOnly: true });
+  });
+  const piJobsOpen = piJobsDialog?.threadKey === routeThreadKey;
+  const piModeStatus = piStatuses.find(({ key }) => key === PI_PLAN_STATUS)?.text;
+  const piMode =
+    piModeStatus === "plan" || piModeStatus === "build"
+      ? piModeStatus
+      : selectedProvider === "pi" && activeProviderThread?.driver === "pi"
+        ? (activeProviderThread.nativeMetadata?.piMode ?? null)
+        : null;
   const pendingBackgroundTasks = deriveThreadPendingBackgroundTasks(serverProjection);
   const activeWorkStartedAt =
     deriveActiveWorkStartedAt(activeActivityRun, activeRuntime, localDispatchStartedAt) ??
@@ -2013,7 +2052,73 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
   const sendAppMessageStable = useStableCallback(sendAppMessage);
+  const trackingActive = piStatuses.some(
+    ({ key, text }) => key === "goal-tracker" && text === "Tracking in progress",
+  );
+  const trackingInFooter =
+    trackingActive &&
+    canOperateThread &&
+    isServerThread &&
+    !isWorking &&
+    piMode !== "plan" &&
+    !activePendingApproval &&
+    !activePendingUserInput;
+  const openTrackingJournal = useStableCallback(async () => {
+    if (
+      !trackingActive ||
+      piMode === "plan" ||
+      isWorking ||
+      !activeThread ||
+      !canOperateThread ||
+      activePendingApproval ||
+      activePendingUserInput
+    )
+      return;
+    try {
+      await sendAppMessage("/track-journal");
+    } catch (error) {
+      setThreadError(
+        activeThread.id,
+        thrownErrorMessage(error, m) ?? gt("Could not open the tracking journal."),
+      );
+    }
+  });
+  const togglePiMode = useStableCallback(async () => {
+    if (
+      !canOperateThread ||
+      !activeThread ||
+      !isServerThread ||
+      !piMode ||
+      isWorking ||
+      activePendingApproval ||
+      activePendingUserInput
+    )
+      return;
+    try {
+      await sendAppMessage(piMode === "plan" ? "/plan off" : "/plan on");
+    } catch (error) {
+      setThreadError(
+        activeThread.id,
+        thrownErrorMessage(error, m) ?? gt("Could not switch Pi mode."),
+      );
+    }
+  });
+  const piModeAction =
+    piMode &&
+    canOperateThread &&
+    isServerThread &&
+    !isWorking &&
+    !activePendingApproval &&
+    !activePendingUserInput
+      ? togglePiMode
+      : undefined;
   const queuedRunsControlRef = useRef<QueuedRunsControlHandle>(null);
+  const redirectPiQueued = useStableCallback(
+    (repeat: boolean) => queuedRunsControlRef.current?.redirectNext(repeat) === true,
+  );
+  const recallPiQueued = useStableCallback(
+    (repeat: boolean) => queuedRunsControlRef.current?.editLatest(repeat) === true,
+  );
 
   const {
     activatePanelTerminalStable,
@@ -2578,6 +2683,9 @@ export default function ChatView(props: ChatViewProps) {
     threadDetailRef: routeThreadDetailRef,
     activeThreadKey,
     activeThreadShell,
+    piGoalOwner:
+      activeProviderThread?.driver === "pi" ? activeProviderThread.providerInstanceId : null,
+    selectedInstanceId: activeProviderInstanceId,
     activeLatestRun,
     limitRecoveryHoldsSnooze,
     activeProjectCwd,
@@ -2793,7 +2901,12 @@ export default function ChatView(props: ChatViewProps) {
         : [];
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const extensionStatusBanner = extensionStatusBannerItem(
-      deriveProviderExtensionStatuses(serverProjection),
+      deriveProviderExtensionStatuses(serverProjection).filter(
+        ({ key }) =>
+          !(trackingInFooter && key === "goal-tracker") &&
+          !(piJobs?.length && key === "lean-jobs") &&
+          !(key === "pi-goal" && activeProviderThread?.driver === "pi" && activeThreadShell?.goal),
+      ),
     );
     const extensionStatusItems = extensionStatusBanner === null ? [] : [extensionStatusBanner];
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
@@ -3524,11 +3637,20 @@ export default function ChatView(props: ChatViewProps) {
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
           rightPanelMaximized ? "w-0 flex-none" : "flex-1",
         )}
+        style={selectedProvider === "pi" ? piColorsStyle(piColors) : undefined}
+        data-pi-mode={piMode ?? undefined}
         data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
         data-chat-column
         inert={rightPanelMaximized}
         onMouseUp={preventMiddleClickPasteOutsideEditable}
       >
+        {selectedProvider === "pi" && piColorThread === threadId && (
+          <PiColorsDialog
+            colors={piColors}
+            onSave={setPiColors}
+            onClose={() => setPiColorThread(null)}
+          />
+        )}
         {embedded ? null : (
           <header
             ref={threadPanelPopoverAnchorRef}
@@ -3624,6 +3746,7 @@ export default function ChatView(props: ChatViewProps) {
                   canOperateThread={canOperateThread}
                   threadDetailRef={routeThreadDetailRef}
                   entriesInput={timelineEntriesInput}
+                  hideReasoning={selectedProvider === "pi"}
                   draftEntries={isServerThread ? null : draftTimelineEntries}
                   activeThreadKey={activeThreadKey}
                   syncing={threadSyncPhase !== null}
@@ -3945,6 +4068,28 @@ export default function ChatView(props: ChatViewProps) {
                                 onPageScrollRelease={onComposerPageScrollReleaseStable}
                                 onCompactContext={onComposerCompactContextStable}
                                 onSend={onComposerSendStable}
+                                onPiContextInspect={
+                                  selectedProvider === "pi" ? openPiContextInspector : undefined
+                                }
+                                onPiModeToggle={piModeAction}
+                                onPiRedirectQueued={
+                                  selectedProvider === "pi" && isServerThread
+                                    ? redirectPiQueued
+                                    : undefined
+                                }
+                                onPiColors={selectedProvider === "pi" ? openPiColors : undefined}
+                                onPiInspectShells={
+                                  piJobs?.some(
+                                    (job) => job.kind === "shell" && job.status === "running",
+                                  )
+                                    ? inspectPiShells
+                                    : undefined
+                                }
+                                onPiRecallQueued={
+                                  selectedProvider === "pi" && isServerThread
+                                    ? recallPiQueued
+                                    : undefined
+                                }
                                 captureDetachedSend={captureDetachedSend}
                                 onResume={onComposerResumeStable}
                                 onInterrupt={onInterruptStable}
@@ -3984,6 +4129,25 @@ export default function ChatView(props: ChatViewProps) {
                             )}
                           </div>
                         </ComposerSurface.Host>
+                        {selectedProvider === "pi" && (
+                          <PiComposerFooter
+                            usage={activeContextWindow}
+                            model={activeUsageModel}
+                            workspace={activeThreadBranch ?? activeProject?.title ?? null}
+                            statistics={piStatistics}
+                            onOpenTrackingJournal={
+                              trackingInFooter ? openTrackingJournal : undefined
+                            }
+                            mode={piMode}
+                            onToggleMode={piModeAction}
+                            jobs={piJobs}
+                            jobsOpen={piJobsOpen}
+                            shellOnly={piJobsOpen && piJobsDialog.shellOnly}
+                            onJobsOpenChange={onPiJobsOpenChange}
+                            inspectorOpen={piInspectorThread === threadId}
+                            onInspectorOpenChange={onPiInspectorOpenChange}
+                          />
+                        )}
                         <div className="min-h-0">
                           <div
                             data-terminal-open={terminalUiState.terminalOpen ? "true" : undefined}

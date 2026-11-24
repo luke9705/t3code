@@ -270,6 +270,7 @@ export interface ResumeThreadQueueInput extends ThreadCommandInput {
 export interface PromoteQueuedRunInput extends ThreadCommandInput {
   readonly queuedRunId: RunId;
   readonly targetRunId: RunId;
+  readonly redirect?: true;
 }
 
 export interface CancelQueuedRunInput extends ThreadCommandInput {
@@ -1186,6 +1187,7 @@ export const promoteQueuedRun = Effect.fn("EnvironmentCommands.promoteQueuedRun"
       threadId: input.threadId,
       queuedRunId: input.queuedRunId,
       targetRunId: input.targetRunId,
+      ...(input.redirect ? { redirect: true as const } : {}),
     }),
   );
 });

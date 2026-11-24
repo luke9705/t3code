@@ -281,6 +281,7 @@ interface MessagesTimelineProps {
   ) => void;
   renderHtmlRender?: TimelineRowSharedState["renderHtmlRender"];
   turnItemSource?: TimelineRowSharedState["turnItemSource"];
+  compactPiTools?: boolean;
   /**
    * The thread this one is a subagent or side chat of; `open` is absent when it cannot be
    * opened from here.
@@ -401,6 +402,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onOpenThread,
   renderHtmlRender,
   turnItemSource,
+  compactPiTools = false,
   parentThreadLink = null,
   workflowOpening = null,
   onForkFromRun,
@@ -761,6 +763,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     expandedRunIds: visibleExpandedRunIds,
     expandedAttemptIds: visibleExpandedAttemptIds,
     expandedWorkGroupIds,
+    compactPiTools,
     isWorking,
     runlessWorkActive,
     activeTurnStartedAt,
@@ -1147,6 +1150,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onOpenThread,
     renderHtmlRender,
     turnItemSource,
+    compactPiTools,
     workflowOpening,
     onForkFromRun,
     onToggleTurnFold,
@@ -1768,6 +1772,8 @@ function ContextCompactionTimelineRow({
   row: Extract<TimelineRow, { kind: "context-compaction" }>;
 }) {
   const gt = useGT();
+  const { compactPiTools } = use(TimelineRowCtx);
+  const piCompacting = compactPiTools && row.active && !row.failed;
   const label =
     row.title && row.compacted
       ? row.tokenCounts
@@ -1818,10 +1824,12 @@ function ContextCompactionTimelineRow({
       <span className={cn("h-px flex-1", row.failed ? "bg-destructive/30" : "bg-border/70")} />
       <span
         ref={row.active ? observeVisibleAnimation : undefined}
-        className="relative min-w-0 overflow-hidden"
+        className={cn("relative min-w-0 overflow-hidden", piCompacting && "pi-compacting-label")}
       >
         {content}
-        {row.active ? <ActivityShimmerOverlay>{content}</ActivityShimmerOverlay> : null}
+        {row.active && !piCompacting ? (
+          <ActivityShimmerOverlay>{content}</ActivityShimmerOverlay>
+        ) : null}
       </span>
       <span className={cn("h-px flex-1", row.failed ? "bg-destructive/30" : "bg-border/70")} />
     </div>

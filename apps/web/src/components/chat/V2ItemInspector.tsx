@@ -12,7 +12,7 @@ import {
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import { isJavaScriptReplTool } from "@t3tools/shared/toolActivity";
 import { ExternalLinkIcon } from "lucide-react";
-import { memo, type ReactNode, Suspense, use } from "react";
+import { memo, type ReactNode, Suspense, use, useMemo } from "react";
 
 import { useRenderedAppearance } from "../../hooks/useTheme";
 import { cn } from "../../lib/utils";
@@ -24,7 +24,11 @@ import { Button } from "../ui/button";
 import ChatMarkdown from "../ChatMarkdown";
 import { ChatMarkdownAssetImage } from "./ChatMarkdownMedia";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
-import { CommandOutputPanel, useCommandOutputStreaming } from "./CommandOutputPanel";
+import {
+  CommandOutputPanel,
+  PiCompactCommandOutput,
+  useCommandOutputStreaming,
+} from "./CommandOutputPanel";
 import { resolveExternalWebLinkHref } from "./externalLinkContextMenu";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ShellCommandBlock } from "./ShellCommandBlock";
@@ -240,6 +244,110 @@ function ToolCallBody(
     </div>
   );
 }
+
+const previewLines = (patch: string) => {
+  const prefix = patch.slice(0, 20_000);
+  const lines = prefix.split("\n", 201);
+  return {
+    lines: lines.slice(0, 200),
+    truncated: patch.length > prefix.length || lines.length > 200,
+  };
+};
+
+export const PiShellPreview = memo(function PiShellPreview(props: V2ItemInspectorProps) {
+  const environmentStreams = useCommandOutputStreaming(props.environmentId);
+  const streams =
+    props.source === undefined ? environmentStreams : props.source.commandOutput !== undefined;
+  const fetched = useFetchedTurnItem(
+    props.projectedItem,
+    props.environmentId,
+    props.source,
+    streams,
+  );
+  return streams ? (
+    <CommandOutputPanel
+      compact
+      environmentId={props.environmentId}
+      threadId={props.projectedItem.sourceThreadId}
+      itemId={props.projectedItem.sourceItemId}
+      source={props.source?.commandOutput}
+    />
+  ) : (
+    <PiCompactCommandOutput text={fetched.output.output ?? ""} />
+  );
+});
+
+export const PiInlineDiff = memo(function PiInlineDiff(props: V2ItemInspectorProps) {
+  const wire = props.projectedItem.item;
+  const fetches =
+    wire.type === "file_change" && wire.status === "completed" && wire.diffStr === undefined;
+  const detail = useTurnItemDetail(
+    fetches
+      ? {
+          environmentId: props.environmentId,
+          threadId: props.projectedItem.sourceThreadId,
+          itemId: props.projectedItem.sourceItemId,
+          revision: turnItemDetailRevision(wire),
+        }
+      : null,
+    props.source?.detail,
+  );
+  const item = detail.data?.item?.type === "file_change" ? detail.data.item : wire;
+  const patch = item.type === "file_change" ? item.diffStr : undefined;
+  const added = item.type === "file_change" && patch === undefined && item.newStr !== undefined;
+  const body = item.type === "file_change" && added ? item.newStr : patch;
+  const preview = useMemo(() => (body ? previewLines(body) : null), [body]);
+  useInitialOutputReady(fetches && detail.isPending, props.onInitialOutputReady);
+  if (!preview && !props.onOpenToolDiff) return null;
+  return (
+    <div className="space-y-1" data-pi-inline-diff>
+      {preview ? (
+        <pre
+          className={cn(
+            "max-h-52 overflow-auto rounded border border-border/50 p-2",
+            monoClassName,
+          )}
+        >
+          {preview.lines.map((line, index) => (
+            <span
+              key={index}
+              className={
+                added || line.startsWith("+")
+                  ? "text-diff-addition"
+                  : line.startsWith("-")
+                    ? "text-diff-deletion"
+                    : "text-muted-foreground"
+              }
+            >
+              {line}
+              {"\n"}
+            </span>
+          ))}
+          {preview.truncated && (
+            <span className="text-muted-foreground">
+              <T>Diff preview truncated</T>
+            </span>
+          )}
+        </pre>
+      ) : null}
+      {props.onOpenToolDiff && (
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() =>
+            props.onOpenToolDiff?.({
+              threadId: props.projectedItem.sourceThreadId,
+              itemId: props.projectedItem.sourceItemId,
+              revision: turnItemDetailRevision(wire),
+            })
+          }
+        >
+          <T>Open full diff</T>
+        </Button>
+      )}
+    </div>
+  );
+});
 
 export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspectorProps) {
   const gt = useGT();

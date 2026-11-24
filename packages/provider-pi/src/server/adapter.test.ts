@@ -203,6 +203,7 @@ interface FakePi {
   readonly closeStdout: Effect.Effect<void>;
   readonly lastSpawn: () => {
     readonly args: ReadonlyArray<string>;
+    readonly cwd?: string;
     readonly env: NonNullable<ChildProcess.CommandOptions["env"]>;
   };
 }
@@ -280,6 +281,8 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       success: true,
     };
     switch (record["type"]) {
+      case "get_commands":
+        return { ...base, data: { commands: [{ name: "goal", source: "extension" }] } };
       case "get_state":
         if (failStateAfter !== null && failStateAfter-- === 0) {
           failStateAfter = null;
@@ -315,6 +318,10 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         thinkingLevel = String(record["level"]);
         return base;
       case "prompt":
+        if (String(record["message"]).startsWith("/t3-stop-delegate "))
+          return { ...base, data: { disposition: "handled" } };
+        if (record["message"] === "/goal pause")
+          return { ...base, data: { disposition: "handled" } };
         if (String(record["message"]).startsWith(serviceTierCommand)) {
           serviceTier = String(record["message"]).slice(serviceTierCommand.length).trim() || null;
           return promptDisposition ? { ...base, data: { disposition: "handled" } } : base;
@@ -419,6 +426,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       if (ChildProcess.isStandardCommand(command)) {
         lastSpawn = {
           args: command.args.map(String),
+          ...(typeof command.options.cwd === "string" ? { cwd: command.options.cwd } : {}),
           env: command.options.env ?? {},
         };
       }
@@ -630,6 +638,7 @@ const startTurn = Effect.fnUntraced(function* (
   runOrdinal = 1,
   threadId = THREAD_ID,
   continuation = false,
+  piRedirect = false,
 ) {
   const appThread = yield* makeAppThread(model, threadId);
   const runId = RunId.make(`run:${threadId}:${runOrdinal}`);
@@ -639,6 +648,7 @@ const startTurn = Effect.fnUntraced(function* (
     runId,
     runOrdinal,
     providerTurnOrdinal: runOrdinal,
+    ...(piRedirect ? { piRedirect: true as const } : {}),
     attemptId: RunAttemptId.make(`run-attempt:${runId}:1`),
     rootNodeId: NodeId.make(`node:${runId}:root`),
     providerThread,
@@ -655,6 +665,211 @@ const startTurn = Effect.fnUntraced(function* (
 });
 
 describe("PiAdapterV2", () => {
+  it.effect("persists the mode reported by the native Pi session", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        method: "setStatus",
+        statusKey: "t3.pi.plan.v1",
+        statusText: "plan",
+      });
+      const changed = yield* takeEvent(
+        (event) => event.type === "provider_thread.updated" && event.sessionScoped === true,
+      );
+      assert.isTrue(
+        changed.type === "provider_thread.updated" &&
+          changed.providerThread.id === providerThread.id &&
+          changed.providerThread.nativeMetadata?.piMode === "plan",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("does not send /plan as a model prompt if the Plan extension is missing", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread, "default", [], "/plan on").pipe(Effect.flip);
+      assert.isFalse(fake.allRequests().some((request) => request["type"] === "prompt"));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+  it.effect("opens the tracking journal as a read-only native selection", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread, "default", [], "/track-journal");
+      assert.equal((yield* fake.takeRequest("prompt"))["message"], "/t3-track-journal");
+      yield* fake.emit({
+        type: "extension_ui_request",
+        method: "select",
+        id: "journal-dialog",
+        title: "T3_PI_TRACK_JOURNAL\n**Goal:** Test the active journal",
+        options: ["All", "Open", "Failed", "Worked", "Close"],
+      });
+      const item = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+      );
+      if (item.type !== "turn_item.updated" || item.turnItem.type !== "user_input_request")
+        throw new Error("Expected journal request");
+      const [question] = item.turnItem.questions;
+      assert.equal(question?.header, "Tracking journal");
+      assert.equal(question?.question, "**Goal:** Test the active journal");
+      assert.isFalse(question?.allowCustomAnswer);
+      assert.deepEqual(
+        question?.options.map((option) => option.value),
+        ["All", "Open", "Failed", "Worked", "Close"],
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+  it.effect("appends the redirect guidance only to the redirected Pi prompt", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(
+        runtime,
+        providerThread,
+        "default",
+        [],
+        "Use the other file",
+        undefined,
+        1,
+        THREAD_ID,
+        false,
+        true,
+      );
+      assert.equal(
+        (yield* fake.takeRequest("prompt"))["message"],
+        "Use the other file\n\nApply this update, then continue the interrupted task unless asked to stop, pause, or switch tasks.",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+  it.effect("restores the active branch's Pi goal and clears it on a native clear event", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const goal = {
+        objective: "Review milestones",
+        status: "paused" as const,
+        tokensUsed: 29,
+        tokenBudget: 100,
+        timeUsedSeconds: 15,
+      };
+      fake.queueEntries({
+        leafId: "child",
+        entries: [
+          { id: "root", parentId: null, type: "custom", customType: "pi-goal", data: { goal } },
+          { id: "child", parentId: "root", type: "custom", customType: "other" },
+          {
+            id: "abandoned",
+            parentId: "root",
+            type: "custom",
+            customType: "pi-goal",
+            data: { goal: null },
+          },
+        ],
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      assert.deepEqual(providerThread.goal, goal);
+      yield* fake.emit({
+        type: "message_end",
+        message: {
+          role: "custom",
+          customType: "pi-goal-event",
+          display: true,
+          details: { kind: "cleared", goal },
+        },
+      });
+      const cleared = yield* takeEvent(
+        (event) => event.type === "provider_thread.updated" && event.sessionScoped === true,
+      );
+      assert.deepInclude(cleared, { providerThread: { ...providerThread, goal: null } });
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+  it.effect(
+    "writes a live T3 rename and publishes only the attached Pi session's later rename",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* fake.emit({
+          type: "extension_ui_request",
+          method: "setStatus",
+          statusKey: "t3.pi.title-owner.v1",
+          statusText: "native",
+        });
+        yield* takeEvent(
+          (event) =>
+            event.type === "provider_session.updated" &&
+            event.providerSession.extensionStatuses?.some(
+              ({ key }) => key === "t3.pi.title-owner.v1",
+            ) === true,
+        );
+        yield* runtime.applyThreadTitle!({
+          providerThread,
+          title: "Generated fallback",
+          manuallyRenamed: false,
+        });
+        assert.isFalse(
+          fake.allRequests().some((request) => request["type"] === "set_session_name"),
+        );
+        yield* runtime.applyThreadTitle!({
+          providerThread,
+          title: "App title",
+          manuallyRenamed: true,
+        });
+        assert.equal((yield* fake.takeRequest("set_session_name"))["name"], "App title");
+        for (const [id, title] of [
+          ["other", "Foreign title"],
+          ["00000000-0000-4000-8000-000000000002", "Native title"],
+        ]) {
+          yield* fake.emit({
+            type: "extension_ui_request",
+            method: "setStatus",
+            statusKey: "t3.pi.native-title.v1",
+            statusText: JSON.stringify({ id, title }),
+          });
+        }
+        const renamed = yield* takeEvent(
+          (event) =>
+            event.type === "provider_thread.updated" && event.nativeTitleChange !== undefined,
+        );
+        assert.isTrue(renamed.type === "provider_thread.updated" && renamed.sessionScoped === true);
+        assert.deepInclude(renamed, {
+          nativeTitleChange: { from: "App title", to: "Native title" },
+        });
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
   it.effect(
     "replaces keyed extension statuses while idle without producing conversation items",
     () =>
@@ -712,6 +927,52 @@ describe("PiAdapterV2", () => {
           fake.allRequests().some((request) => request["type"] === "extension_ui_response"),
         );
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("projects only validated Pi metrics, mode, and jobs through extension status", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      for (const [statusKey, statusText] of [
+        ["t3.pi.plan.v1", "plan"],
+        ["t3.pi.plan.v1", "unknown mode"],
+        [
+          "t3.pi.presentation.v1",
+          '{"composition":[1,2,3,4,5,6],"cache":25,"systemPrompt":"private","physicalModel":"/private/model"}',
+        ],
+        ["t3.pi.presentation.v1", "not JSON"],
+        [
+          "t3.pi.jobs.v1",
+          '[{"id":"owned","kind":"shell","status":"running","background":true,"label":"private","result":"private"},{"id":"/private","kind":"subagent","status":"running","background":true}]',
+        ],
+        ["t3.pi.jobs.v1", "not JSON"],
+      ]) {
+        yield* fake.emit({
+          type: "extension_ui_request",
+          method: "setStatus",
+          statusKey,
+          statusText,
+        });
+      }
+      yield* fake.emit({
+        type: "extension_ui_request",
+        method: "input",
+        id: "presentation-barrier",
+        title: "Continue?",
+      });
+      yield* takeEvent((event) => event.type === "runtime_request.updated");
+      const statuses = runtime.providerSession.extensionStatuses ?? [];
+      assert.deepInclude(statuses, { key: "t3.pi.plan.v1", text: "plan" });
+      const metrics = statuses.find(({ key }) => key === "t3.pi.presentation.v1")?.text;
+      assert.isDefined(metrics);
+      assert.include(metrics ?? "", '"composition":[1,2,3,4,5,6]');
+      assert.include(metrics ?? "", '"cache":25');
+      assert.notInclude(metrics ?? "", "private");
+      assert.deepInclude(statuses, {
+        key: "t3.pi.jobs.v1",
+        text: '[{"id":"owned","kind":"shell","status":"running","background":true}]',
+      });
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect("bounds native extension statuses and lets cleared keys free capacity", () =>
@@ -2414,6 +2675,89 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("stages a move in the destination without switching the source process", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const forkFake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(
+        fake,
+        "default",
+        THREAD_ID,
+        SESSION_ID,
+        forkFake,
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const cwd = "/fake/move-destination";
+      const stage = runtime.stageThreadRelocation!;
+      const originalRequests = fake.allRequests().length;
+      const leanStatus = (text?: string) =>
+        fake
+          .emit({
+            type: "extension_ui_request",
+            method: "setStatus",
+            statusKey: "lean-jobs",
+            ...(text === undefined ? {} : { statusText: text }),
+          })
+          .pipe(
+            Effect.andThen(
+              takeEvent(
+                (event) =>
+                  event.type === "provider_session.updated" &&
+                  event.providerSession.extensionStatuses?.find(({ key }) => key === "lean-jobs")
+                    ?.text === text,
+              ),
+            ),
+          );
+      yield* leanStatus("1 shell · 2 subagents");
+      assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+      assert.isTrue(yield* runtime.hasPendingBackgroundWorkForThread!(providerThread));
+      const busy = yield* stage({ providerThread, cwd }).pipe(Effect.flip);
+      assert.match(String(busy), /idle attached/);
+      assert.deepEqual(forkFake.lastSpawn().args, []);
+      yield* leanStatus("2 subagents");
+      assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+      yield* leanStatus();
+      assert.isFalse(yield* runtime.hasPendingBackgroundWorkForThread!(providerThread));
+      forkFake.queueState({ sessionFile: FAKE_SESSION_FILE });
+      const error = yield* stage({ providerThread, cwd }).pipe(Effect.flip);
+      assert.match(String(error), /could not stage/);
+      assert.lengthOf(fake.allRequests(), originalRequests);
+
+      const nativeId = "/fake/moved-conversation.jsonl";
+      forkFake.queueState({ sessionFile: nativeId });
+      const moved = yield* stage({ providerThread, cwd });
+      assert.equal(moved.id, providerThread.id);
+      assert.equal(moved.nativeThreadRef?.nativeId, nativeId);
+      assert.isNull(moved.providerSessionId);
+      assert.equal(moved.status, "not_loaded");
+      assert.lengthOf(fake.allRequests(), originalRequests);
+      const launch = forkFake.lastSpawn();
+      assert.equal(launch.cwd, cwd);
+      assert.equal(launch.args[launch.args.indexOf("--fork") + 1], FAKE_SESSION_FILE);
+      assert.include(launch.args, "--no-extensions");
+      assert.include(launch.args, "--no-tools");
+
+      const unusedLiveProcess = yield* makeFakePi;
+      const coldFork = yield* makeFakePi;
+      const coldAdapter = yield* makeAdapter(unusedLiveProcess, "", coldFork);
+      const coldDestination = "/fake/cold-moved-conversation.jsonl";
+      coldFork.queueState({ sessionFile: coldDestination });
+      const cold = yield* coldAdapter.stageSavedThreadRelocation!({
+        providerThread: { ...providerThread, providerSessionId: null, status: "not_loaded" },
+        cwd,
+      });
+      assert.equal(cold.id, providerThread.id);
+      assert.equal(cold.nativeThreadRef?.nativeId, coldDestination);
+      assert.isNull(cold.providerSessionId);
+      assert.deepEqual(unusedLiveProcess.lastSpawn().args, []);
+      assert.equal(coldFork.lastSpawn().cwd, cwd);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("forks a resumed session recorded in another cwd into the runtime cwd", () =>
     Effect.gen(function* () {
       const host = yield* ProviderHost.ProviderHost;
@@ -2708,6 +3052,45 @@ describe("PiAdapterV2", () => {
       assert.deepEqual(
         { provider: hubRequest["provider"], modelId: hubRequest["modelId"] },
         { provider: hub, modelId: "claude-haiku-4-5" },
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("retries a model selection once when the Pi provider registers after startup", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      fake.deferNextModelSelection();
+      const launching = yield* startTurn(
+        runtime,
+        providerThread,
+        "default",
+        [],
+        "Test late registration",
+        modelSelection("kapitsa/fixture"),
+      ).pipe(Effect.forkScoped);
+      const { id } = yield* fake.takeRequest("set_model");
+      fake.queueModels([{ provider: "kapitsa", id: "fixture" }]);
+      yield* fake.emit({
+        type: "response",
+        id,
+        command: "set_model",
+        success: false,
+        error: "Model not found: kapitsa/fixture",
+      });
+      const retry = yield* fake.takeRequest("set_model");
+      assert.equal(retry.provider, "kapitsa");
+      assert.equal(retry.modelId, "fixture");
+      yield* Fiber.join(launching);
+      yield* fake.takeRequest("prompt");
+      assert.lengthOf(
+        fake.allRequests().filter(({ type }) => type === "set_model"),
+        2,
       );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
@@ -3760,118 +4143,160 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect("shows the members of an async pi-subagents workflow as running subagents", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
-      // Frames as pi-subagents 0.88.1 sends them for an async `runs.all([alpha, beta])` workflow.
-      const step = (key: string, state: string) => ({
-        id: key,
-        kind: "step",
-        label: key,
-        state,
-        startedAt: 1_000,
-        updatedAt: 2_000,
-        activity: { currentTool: "bash", turnCount: 1, toolCount: 1 },
-        agent: "scout",
-        model: "anthropic/claude-haiku-5-5",
-      });
-      const emitSnapshot = (state: string, alpha: string, beta: string) =>
-        fake.emit({
-          type: "extension_ui_request",
-          id: `widget-${state}`,
-          method: "setWidget",
-          widgetKey: "subagent-async",
-          widgetLines: [
-            `PI_SUBAGENT_ASYNC_JSON:${JSON.stringify({
-              kind: "pi-subagents.async-status-snapshot",
-              version: 1,
-              generatedAt: 2_000,
-              runs: [
-                {
-                  id: "wf-1",
-                  kind: "workflow",
-                  label: "scout, scout",
-                  state,
-                  startedAt: 1_000,
-                  updatedAt: 2_000,
-                  children: [step("alpha", alpha), step("beta", beta)],
-                },
-              ],
-            })}`,
-          ],
+  it.effect.each(["subagent", "delegate"] as const)(
+    "projects async Pi $0 workflow members",
+    (toolName) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
         });
-      const collect = (marker: string) =>
-        Effect.gen(function* () {
-          yield* fake.emit({
-            type: "tool_execution_end",
-            toolCallId: marker,
-            toolName: marker,
-            result: { content: [{ type: "text", text: "after" }] },
+        yield* startTurn(runtime, providerThread);
+        yield* fake.takeRequest("prompt");
+        yield* fake.emit({ type: "agent_start" });
+        // Frames as pi-subagents 0.88.1 sends them for an async `runs.all([alpha, beta])` workflow.
+        const step = (key: string, state: string) => ({
+          id: key,
+          kind: "step",
+          label: key,
+          state,
+          startedAt: 1_000,
+          updatedAt: 2_000,
+          activity: { currentTool: "bash", turnCount: 1, toolCount: 1 },
+          agent: "scout",
+          model: "anthropic/claude-haiku-5-5",
+        });
+        const emitSnapshot = (state: string, alpha: string, beta: string) =>
+          fake.emit({
+            type: "extension_ui_request",
+            id: `widget-${state}`,
+            method: "setWidget",
+            widgetKey: "subagent-async",
+            widgetLines: [
+              `PI_SUBAGENT_ASYNC_JSON:${JSON.stringify({
+                kind: "pi-subagents.async-status-snapshot",
+                version: 1,
+                generatedAt: 2_000,
+                runs: [
+                  {
+                    id: "wf-1",
+                    kind: "workflow",
+                    label: "scout, scout",
+                    state,
+                    startedAt: 1_000,
+                    updatedAt: 2_000,
+                    children: [step("alpha", alpha), step("beta", beta)],
+                  },
+                ],
+              })}`,
+            ],
           });
-          const statuses = new Map<string, string>();
-          const pending: Array<boolean> = [];
-          while (true) {
-            const event = yield* takeEvent(
-              (event) =>
-                event.type === "subagent.updated" ||
-                event.type === "background_work.updated" ||
-                (event.type === "turn_item.updated" &&
-                  event.turnItem.type === "dynamic_tool" &&
-                  event.turnItem.toolName === marker),
-            );
-            if (event.type === "background_work.updated") pending.push(event.pending);
-            else if (event.type === "subagent.updated")
-              statuses.set(event.subagent.id, event.subagent.status);
-            else break;
+        const collect = (marker: string) =>
+          Effect.gen(function* () {
+            yield* fake.emit({
+              type: "tool_execution_end",
+              toolCallId: marker,
+              toolName: marker,
+              result: { content: [{ type: "text", text: "after" }] },
+            });
+            const statuses = new Map<string, string>();
+            const pending: Array<boolean> = [];
+            while (true) {
+              const event = yield* takeEvent(
+                (event) =>
+                  event.type === "subagent.updated" ||
+                  event.type === "background_work.updated" ||
+                  (event.type === "turn_item.updated" &&
+                    event.turnItem.type === "dynamic_tool" &&
+                    event.turnItem.toolName === marker),
+              );
+              if (event.type === "background_work.updated") pending.push(event.pending);
+              else if (event.type === "subagent.updated")
+                statuses.set(event.subagent.id, event.subagent.status);
+              else break;
+            }
+            return { statuses: [...statuses.values()].toSorted(), pending };
+          });
+        // The launch snapshot precedes the tool result that names the run.
+        yield* emitSnapshot("running", "running", "running");
+        if (toolName === "delegate") {
+          yield* fake.emit({
+            type: "tool_execution_start",
+            toolCallId: "call_wf",
+            toolName,
+            args: {},
+          });
+          for (const requestId of ["unrelated", "call_wf"]) {
+            yield* fake.emit({
+              type: "extension_ui_request",
+              method: "setWidget",
+              widgetKey: "t3.pi.delegate-launch.v1",
+              widgetLines: [JSON.stringify({ requestId, runId: "wf-1" })],
+            });
           }
-          return { statuses: [...statuses.values()].toSorted(), pending };
-        });
-      // The launch snapshot precedes the tool result that names the run.
-      yield* emitSnapshot("running", "running", "running");
-      yield* fake.emit({
-        type: "tool_execution_end",
-        toolCallId: "call_wf",
-        toolName: "subagent",
-        isError: false,
-        result: {
-          content: [{ type: "text", text: "Async workflow started: wf-1" }],
-          details: {
-            mode: "workflow",
-            runId: "wf-1",
-            asyncId: "wf-1",
-            results: [],
-            workflowChildren: {
-              version: 1,
-              parentToolCallId: "call_wf",
-              workflowRunId: "wf-1",
-              inventoryComplete: false,
-              workflowState: "running",
-              children: [],
+          assert.deepEqual(yield* collect("delegate-launched"), {
+            statuses: ["running", "running"],
+            pending: [true],
+          });
+          yield* fake.emit({
+            type: "tool_execution_update",
+            toolCallId: "call_wf",
+            toolName,
+            partialResult: { details: { jobId: "job-1", runId: "wf-1" } },
+          });
+        }
+        yield* fake.emit({
+          type: "tool_execution_end",
+          toolCallId: "call_wf",
+          toolName,
+          isError: false,
+          result: {
+            content: [{ type: "text", text: "Async workflow started: wf-1" }],
+            details: {
+              mode: "workflow",
+              runId: "wf-1",
+              ...(toolName === "subagent" ? { asyncId: "wf-1", results: [] } : {}),
+              workflowChildren: {
+                version: 1,
+                parentToolCallId: "call_wf",
+                workflowRunId: "wf-1",
+                inventoryComplete: false,
+                workflowState: "running",
+                children: [],
+              },
             },
           },
-        },
-      });
-      assert.deepEqual(yield* collect("marker-1"), {
-        statuses: ["running", "running"],
-        pending: [true],
-      });
-      // pi-subagents can mark the run settled one snapshot before the member that ran last.
-      yield* emitSnapshot("failed", "running", "failed");
-      yield* emitSnapshot("failed", "complete", "failed");
-      assert.deepEqual(yield* collect("marker-2"), {
-        statuses: ["completed", "failed"],
-        pending: [false],
-      });
-    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+        });
+        assert.deepEqual(
+          yield* collect("marker-1"),
+          toolName === "delegate"
+            ? { statuses: [], pending: [] }
+            : { statuses: ["running", "running"], pending: [true] },
+        );
+        const stop = yield* runtime.stopSubagent!({
+          providerThread,
+          nativeTaskId: "call_wf:subagent:alpha",
+        }).pipe(Effect.forkScoped);
+        const request = yield* fake.takeRequest("prompt");
+        assert.equal(request["message"], "/t3-stop-delegate 0 wf-1 alpha");
+        yield* fake.emit({
+          type: "extension_ui_request",
+          method: "setWidget",
+          widgetKey: "t3.pi.delegate-stop.v1",
+          widgetLines: ['{"nonce":"0","success":true}'],
+        });
+        yield* Fiber.join(stop);
+        // pi-subagents can mark the run settled one snapshot before the member that ran last.
+        yield* emitSnapshot("failed", "running", "failed");
+        yield* emitSnapshot("failed", "complete", "failed");
+        assert.deepEqual(yield* collect("marker-2"), {
+          statuses: ["completed", "failed"],
+          pending: [false],
+        });
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect("persists edit patches and write content on file change items", () =>
@@ -3965,6 +4390,36 @@ describe("PiAdapterV2", () => {
         failedEdit.type === "turn_item.updated" &&
           failedEdit.turnItem.type === "file_change" &&
           failedEdit.turnItem.diffStr === "Could not find the text in c.ts.",
+      );
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "call_script",
+        toolName: "codemode",
+        result: {
+          content: [{ type: "text", text: "Updated files" }],
+          details: {
+            fileChanges: [
+              { id: "call_edit", name: "edit", path: "a.ts", status: "ok", diff: "Duplicate" },
+              {
+                id: "call_script/1",
+                name: "write",
+                path: "nested.ts",
+                status: "ok",
+                diff: "+export {};",
+              },
+            ],
+          },
+        },
+      });
+      const nested = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "file_change",
+      );
+      assert.isTrue(
+        nested.type === "turn_item.updated" &&
+          nested.turnItem.type === "file_change" &&
+          nested.turnItem.fileName === "nested.ts" &&
+          nested.turnItem.diffStr === "+export {};" &&
+          nested.turnItem.parentItemId !== null,
       );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
@@ -4122,6 +4577,69 @@ describe("PiAdapterV2", () => {
           setModels,
         );
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("keeps Pi's native Plan effort across a T3 model change", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const selection: ModelSelection = {
+        instanceId: PI_INSTANCE_ID,
+        model: "anthropic/model-a",
+        options: [{ id: "thinking", value: "low" }],
+      };
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: selection,
+        runtimePolicy,
+      });
+      fake.changeNatively({ thinking: "high" });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        method: "setStatus",
+        statusKey: "t3.pi.plan.v1",
+        statusText: "plan",
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_session.updated" &&
+          event.providerSession.extensionStatuses?.some(
+            ({ key, text }) => key === "t3.pi.plan.v1" && text === "plan",
+          ) === true,
+      );
+      yield* startTurn(runtime, providerThread, selection.model, [], "Inspect only", selection);
+      yield* fake.takeRequest("prompt");
+      assert.deepEqual(fake.promptModels, [selection.model]);
+      assert.deepEqual(fake.promptThinkingLevels, ["high"]);
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "agent_settled" });
+      yield* takeEvent((event) => event.type === "turn.terminal");
+      fake.changeNatively({ thinking: "medium" });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        method: "setStatus",
+        statusKey: "t3.pi.plan.v1",
+        statusText: "build",
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_session.updated" &&
+          event.providerSession.extensionStatuses?.some(
+            ({ key, text }) => key === "t3.pi.plan.v1" && text === "build",
+          ) === true,
+      );
+      yield* startTurn(
+        runtime,
+        providerThread,
+        selection.model,
+        [],
+        "Continue in Build",
+        selection,
+        2,
+      );
+      yield* fake.takeRequest("prompt");
+      assert.deepEqual(fake.promptThinkingLevels, ["high", "medium"]);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect("records the model Pi reports on the completed provider turn", () =>
@@ -6413,6 +6931,86 @@ describe("PiAdapterV2", () => {
         );
       });
       assert.deepEqual<ReadonlyArray<string>>(emitted, notices);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("pauses a native Pi goal before clearing its follow-ups and aborting", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      if (running.type !== "provider_turn.updated") throw new Error("Expected the running turn");
+      yield* fake.emit({
+        type: "message_end",
+        message: {
+          role: "custom",
+          customType: "pi-goal-event",
+          display: true,
+          details: {
+            kind: "active",
+            goal: {
+              objective: "Test pause",
+              status: "active",
+              tokenBudget: 100,
+              tokensUsed: 1,
+              timeUsedSeconds: 0,
+            },
+          },
+        },
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_thread.updated" &&
+          event.providerThread.goal?.status === "active",
+      );
+      fake.queueEntries({
+        leafId: "paused-goal",
+        entries: [
+          {
+            id: "paused-goal",
+            parentId: null,
+            type: "custom",
+            customType: "pi-goal",
+            data: {
+              goal: {
+                objective: "Test pause",
+                status: "paused",
+                tokenBudget: 100,
+                tokensUsed: 1,
+                timeUsedSeconds: 0,
+              },
+            },
+          },
+        ],
+      });
+      yield* runtime.interruptTurn({ providerThread, providerTurnId: running.providerTurn.id });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_thread.updated" &&
+          event.providerThread.goal?.status === "paused",
+      );
+      const operations = fake.allRequests().flatMap((request) => {
+        if (request["type"] === "prompt" && request["message"] === "/goal pause") return ["pause"];
+        if (
+          request["type"] === "get_commands" ||
+          request["type"] === "clear_queue" ||
+          request["type"] === "abort"
+        )
+          return [request["type"]];
+        return [];
+      });
+      assert.deepEqual(operations, ["get_commands", "pause", "clear_queue", "abort"]);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

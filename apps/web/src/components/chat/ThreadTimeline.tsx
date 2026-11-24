@@ -24,6 +24,7 @@ export function ThreadTimeline({
   activeThreadKey,
   syncing,
   detailLoading,
+  hideReasoning = false,
   ...timelineProps
 }: Omit<ComponentProps<typeof MessagesTimeline>, "timelineEntries"> & {
   /** Null until the thread's detail may load; see resolveThreadDetailRef. */
@@ -34,6 +35,7 @@ export function ThreadTimeline({
   activeThreadKey: string | null;
   syncing: boolean;
   detailLoading: boolean;
+  hideReasoning?: boolean;
 }) {
   const visibleTurnItems = useTimelineVisibleTurnItems(threadDetailRef);
   const serverEntries = useIncrementalTimelineEntries(activeThreadKey, {
@@ -55,6 +57,17 @@ export function ThreadTimeline({
     rememberReadyThreadTimeline({ threadKey: activeThreadKey, entries });
   }, [activeThreadKey, detailLoading, entries]);
   return (
-    <MessagesTimeline {...timelineProps} syncing={syncing} timelineEntries={displayedEntries} />
+    <MessagesTimeline
+      {...timelineProps}
+      syncing={syncing}
+      compactPiTools={hideReasoning}
+      timelineEntries={
+        hideReasoning
+          ? displayedEntries.filter(
+              (row) => row.kind !== "work" || row.entry.itemType !== "reasoning",
+            )
+          : displayedEntries
+      }
+    />
   );
 }

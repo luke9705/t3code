@@ -752,9 +752,10 @@ const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, 
 });
 
 const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({ localInference: Schema.optionalKey(Schema.Literal("omlx")) }),
   success: Schema.Struct({
     serverTime: Schema.optionalKey(IsoDateTime),
+    omlxRunning: Schema.optionalKey(Schema.Boolean),
   }),
   error: EnvironmentAuthorizationError,
 });

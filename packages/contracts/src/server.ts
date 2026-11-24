@@ -115,6 +115,7 @@ export type ServerProviderSlashCommandInput = typeof ServerProviderSlashCommandI
 
 export const ServerProviderSlashCommand = Schema.Struct({
   name: TrimmedNonEmptyString,
+  inline: Schema.optionalKey(Schema.Boolean),
   description: Schema.optional(TrimmedNonEmptyString),
   input: Schema.optional(ServerProviderSlashCommandInput),
 });

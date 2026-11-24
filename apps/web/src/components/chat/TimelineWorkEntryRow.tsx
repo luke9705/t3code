@@ -8,7 +8,9 @@ import {
 } from "@t3tools/client-runtime/work-log/user-input";
 import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+  AuthOrchestrationOperateScope,
   type EnvironmentId,
+  type NodeId,
   ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -44,6 +46,9 @@ import { Button, InlineButton } from "../ui/button";
 import { useAssetUrls } from "../../assets/assetUrls";
 import { observeResize } from "../../lib/observeResize";
 import { useThreadShell } from "../../state/entities";
+import { useEnvironmentScope } from "../../state/session";
+import { threadEnvironment } from "../../state/threads";
+import { useAtomCommand } from "../../state/use-atom-command";
 import {
   threadReadTargetId,
   threadReadTargetTitle,
@@ -53,7 +58,12 @@ import {
 import { cn } from "~/lib/utils";
 import type { MessageResolver } from "~/i18n/messages";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
-import { FetchedToolOutput, V2ItemInspector } from "./V2ItemInspector";
+import {
+  FetchedToolOutput,
+  PiInlineDiff,
+  PiShellPreview,
+  V2ItemInspector,
+} from "./V2ItemInspector";
 import { SubagentNotificationLink } from "./V2LifecycleRow";
 import {
   TimelineRowCtx,
@@ -281,6 +291,38 @@ export function ViewedImagesTimelineRow({
   );
 }
 
+export function PiStopSubagentButton({
+  environmentId,
+  threadId,
+  subagentId,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly subagentId: NodeId;
+}) {
+  const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
+  const stopSubagent = useAtomCommand(threadEnvironment.interruptTurn);
+  const [stopping, setStopping] = useState(false);
+  if (!canOperate) return null;
+  return (
+    <InlineButton
+      disabled={stopping}
+      onClick={async (event) => {
+        event.stopPropagation();
+        setStopping(true);
+        try {
+          await stopSubagent({ environmentId, input: { threadId, subagentId } });
+        } finally {
+          setStopping(false);
+        }
+      }}
+      onKeyDown={(event) => event.stopPropagation()}
+    >
+      <T>Stop subagent</T>
+    </InlineButton>
+  );
+}
+
 function WorkEntryLogRow(props: WorkEntryRowProps) {
   const { workEntry, workspaceRoot, displayLabel } = props;
   const ctx = use(TimelineRowCtx);
@@ -495,7 +537,12 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     workEntry.projectedItem !== undefined &&
     turnItemNeedsDetailFetch(workEntry.projectedItem.item);
   // A notice's details repeat its row, so it expands only to show text the row cuts off.
+  const piInlineDiff =
+    ctx.compactPiTools && workEntry.projectedItem?.item.type === "file_change"
+      ? workEntry.projectedItem
+      : null;
   const canExpandProjectedItem =
+    !piInlineDiff &&
     (noticeMessage === null || noticeCutOff) &&
     (plainOutput !== undefined
       ? Boolean(plainOutput || viewedImage || workEntry.questionAnswer || plainOutputFetches)
@@ -652,6 +699,13 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
               <T>Open chat</T>
             </button>
           ) : null}
+          {failureItem?.type === "subagent" && failureItem.canStop && (
+            <PiStopSubagentButton
+              environmentId={ctx.activeThreadEnvironmentId}
+              threadId={failureItem.threadId}
+              subagentId={failureItem.subagentId}
+            />
+          )}
           {notifiedSubagentThreadId ? (
             <InlineButton
               aria-label={gt("Open subagent thread")}
@@ -682,6 +736,28 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         </>
       }
     >
+      {ctx.compactPiTools &&
+      !expanded &&
+      workEntry.projectedItem?.item.type === "command_execution" ? (
+        <WorkLogDetails kind="panel">
+          <PiShellPreview
+            projectedItem={workEntry.projectedItem}
+            environmentId={ctx.activeThreadEnvironmentId}
+            source={ctx.turnItemSource}
+          />
+        </WorkLogDetails>
+      ) : null}
+      {piInlineDiff ? (
+        <WorkLogDetails kind="panel">
+          <PiInlineDiff
+            projectedItem={piInlineDiff}
+            environmentId={ctx.activeThreadEnvironmentId}
+            source={ctx.turnItemSource}
+            onOpenToolDiff={ctx.onOpenToolDiff}
+            onInitialOutputReady={onInitialOutputReady}
+          />
+        </WorkLogDetails>
+      ) : null}
       {expanded && viewedImage && threadRef ? (
         <WorkLogDetails kind="media">
           <ChatMarkdownAssetImage

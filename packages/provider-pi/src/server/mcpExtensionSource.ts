@@ -2,6 +2,10 @@
 import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { PULL_REQUEST_LINKING_INSTRUCTIONS } from "@t3tools/provider-core/server/runtimeInstructions";
 
+import { PI_PRESENTATION_SOURCE } from "./presentationExtensionSource.ts";
+import { PI_QUESTION_SOURCE } from "./questionExtensionSource.ts";
+import { PI_TRACKING_JOURNAL_SOURCE } from "./trackingJournalExtensionSource.ts";
+
 export const PI_T3_MCP_EXTENSION_FILENAME = "pi-t3-mcp-extension.ts";
 
 export const T3_MCP_URL_ENV = "T3_MCP_URL";
@@ -14,9 +18,11 @@ export const PI_T3_SERVICE_TIER_COMMAND = "t3-service-tier";
 export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
 
 export const PI_T3_MCP_EXTENSION_SOURCE = `\
-import { stripFrontmatter, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { estimateTokens, getAgentDir, stripFrontmatter, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
+import { constants as NodeFSConstants } from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { Type } from "typebox";
 
@@ -252,7 +258,13 @@ function createMcpClient(endpoint: string, token: string) {
   };
 }
 
+${PI_PRESENTATION_SOURCE}
+${PI_QUESTION_SOURCE}
+${PI_TRACKING_JOURNAL_SOURCE}
 export default async function t3McpExtension(pi: ExtensionAPI) {
+  installPresentation(pi);
+  installQuestionUi(pi);
+  installTrackingJournal(pi);
   // RPC has no trust prompt, so Pi skips an untrusted folder's protected resources. Session
   // replacement reruns this factory without project_trust, and T3 drops notices outside a turn,
   // so check each session's first turn. An explicit --no-approve is deliberate and stays quiet.

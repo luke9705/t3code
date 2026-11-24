@@ -104,6 +104,7 @@ export function useComposerStash(input: {
     threadDraftTarget?: ChatComposerProps["composerDraftTarget"],
   ) => ReadonlyMap<string, string>;
   readonly expandMobileComposer: () => void;
+  readonly onNativeStashShortcut?: (event: KeyboardEvent) => boolean;
 }) {
   const {
     environmentId,
@@ -775,6 +776,12 @@ export function useComposerStash(input: {
     event.preventDefault();
     event.stopPropagation();
     if (isCommandPaletteOpen() || isRevertingCheckpoint()) return;
+    if (
+      event.target instanceof HTMLElement &&
+      event.target.closest(".tiptap") &&
+      input.onNativeStashShortcut?.(event)
+    )
+      return;
     if (pendingUserInputs.length > 0) {
       setIsStashMenuOpen((open) => !open);
       return;

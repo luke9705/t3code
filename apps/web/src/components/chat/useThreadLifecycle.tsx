@@ -107,6 +107,8 @@ interface ThreadLifecycleInput {
   readonly threadDetailRef: ScopedThreadRef | null;
   readonly activeThreadKey: string | null;
   readonly activeThreadShell: EnvironmentThreadShell | null;
+  readonly piGoalOwner: EnvironmentThreadShell["providerInstanceId"] | null;
+  readonly selectedInstanceId: EnvironmentThreadShell["providerInstanceId"] | null;
   /** The usage-limit recovery banner shows this snooze and its Wake now. */
   readonly limitRecoveryHoldsSnooze: boolean;
   readonly activeLatestRun: EnvironmentThreadShell["latestRun"];
@@ -162,6 +164,8 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     threadDetailRef,
     activeThreadKey,
     activeThreadShell,
+    piGoalOwner,
+    selectedInstanceId,
     activeLatestRun,
     limitRecoveryHoldsSnooze,
     activeProjectCwd,
@@ -604,6 +608,24 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   };
   const sendStandaloneCommandStable = useStableCallback(sendStandaloneCommand);
   const activeGoal = activeThreadShell?.goal ?? null;
+  const hidePiGoalActions =
+    piGoalOwner !== null &&
+    (!canOperateThread ||
+      !clientSettingsHydrated ||
+      runIsLive ||
+      isWorking ||
+      activePendingApproval != null ||
+      activePendingUserInput != null ||
+      selectedInstanceId !== piGoalOwner);
+  const sendGoalCommand = useStableCallback(async (text: string, failure: string) => {
+    if (
+      hidePiGoalActions ||
+      (piGoalOwner !== null &&
+        composerRef.current?.getSendContext()?.selectedModelSelection.instanceId !== piGoalOwner)
+    )
+      return;
+    await sendStandaloneCommandStable(text, failure);
+  });
   const goalNow =
     activeThread && activeGoal !== null
       ? goalNowItem(
@@ -611,7 +633,9 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
             threadId: activeThread.id,
             goal: activeGoal,
             isWorking,
-            onSendCommand: sendStandaloneCommandStable,
+            pauseAvailable: piGoalOwner !== null && activeGoal.status === "active",
+            hideActions: hidePiGoalActions,
+            onSendCommand: sendGoalCommand,
           },
           messages,
         )

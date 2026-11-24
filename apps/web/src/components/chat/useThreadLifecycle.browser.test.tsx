@@ -111,6 +111,8 @@ function RestoreBranchHarness(props: {
     canOperateThread: true,
     clientSettingsHydrated: true,
     activeThreadShell: null,
+    piGoalOwner: null,
+    selectedInstanceId: null,
     limitRecoveryHoldsSnooze: false,
     activeLatestRun: null as never,
     activeProjectCwd: "/repo",

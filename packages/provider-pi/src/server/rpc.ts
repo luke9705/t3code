@@ -103,6 +103,9 @@ export interface PiRpcConnection {
   readonly terminate: Effect.Effect<void>;
 }
 
+// Kapitsa starts a 1.5-second catalog request without blocking Pi startup.
+export const PI_MODEL_REGISTRATION_GRACE_MS = 1_500;
+
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const TERMINATION_GRACE = Duration.seconds(1);
 const TERMINATION_POLL_INTERVAL = Duration.millis(20);
