@@ -390,6 +390,8 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { assetEnvironment } from "../state/assets";
 import { readEnvironmentScope, readPreparedConnection } from "../state/session";
 import { useAtomCommand } from "../state/use-atom-command";
+import { agentSessionImport, piSessionStatus } from "../state/agentSessions";
+import type { PiSessionStatus } from "@t3tools/contracts";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { observeResize } from "~/lib/observeResize";
@@ -411,6 +413,7 @@ import { useLocalDispatchState } from "./chat/useLocalDispatchState";
 import { draftFanoutSelectionsAtom, draftSendState } from "./chat/chatViewSend";
 import {
   isCompactCommandMessage,
+  isPiModeCommand,
   type LocalThreadErrorEntry,
   makeThreadErrorSetter,
 } from "./ChatView.logic";
@@ -1575,6 +1578,24 @@ export default function ChatView(props: ChatViewProps) {
     isCompacting,
     runlessWorkStartedAt,
   });
+  const isPiModeCommandRun =
+    selectedProvider === "pi" &&
+    latestServerUserItem?.type === "user_message" &&
+    latestServerUserItem.runId === activeActivityRun?.runId &&
+    latestServerUserItem.attachments.length === 0 &&
+    isPiModeCommand(latestServerUserItem.text);
+  // A mode-only command still occupies the provider; keep send guards separate from work UI.
+  const quietPiModeChange =
+    isPiModeCommandRun &&
+    !isCompacting &&
+    !serverVisibleTurnItems.some(
+      ({ item }) =>
+        item.runId === activeActivityRun?.runId &&
+        (item.type === "assistant_message" ||
+          item.type === "reasoning" ||
+          item.type === "compaction"),
+    );
+  const timelineIsWorking = isWorking && !quietPiModeChange;
   const activeContextWindow = deriveLatestContextWindowSnapshot(
     serverVisibleTurnItems ?? [],
     activeThreadLiveTokenUsage,
@@ -2742,6 +2763,29 @@ export default function ChatView(props: ChatViewProps) {
       : null,
     messages,
   );
+  const extensionStatuses = deriveProviderExtensionStatuses(serverProjection);
+  const piModeText =
+    selectedProvider === "pi"
+      ? extensionStatuses.find(({ key }) => key === "plan-mode")?.text
+      : undefined;
+  const livePiMode =
+    piModeText === "plan mode" ? "plan" : piModeText === "build mode" ? "build" : undefined;
+  const initialPiMode =
+    selectedProvider === "pi" &&
+    activeProviderThread == null &&
+    (isLocalDraftThread || (isServerThread && serverProjection !== null))
+      ? activeProviderStatus?.workspaceSnapshots?.find(({ cwd }) => cwd === gitCwd)?.initialPiMode
+      : undefined;
+  const piMode = livePiMode ?? initialPiMode;
+  const nativePiStatus = useNativePiStatus(
+    selectedProvider === "pi" && activeProviderThread?.driver === "pi" ? routeThreadRef : null,
+    activeProviderThread?.nativeThreadRef?.nativeId,
+  );
+  const savedPiMode =
+    selectedProvider === "pi" && activeProviderThread?.driver === "pi"
+      ? (serverProjection?.thread.savedPiMode ?? undefined)
+      : undefined;
+  const fallbackPiMode = initialPiMode ?? nativePiStatus?.mode ?? savedPiMode;
   const composerBannerItems = (() => {
     const fallbackSelection = draftFallback?.selection;
     const defaultSelection =
@@ -2792,9 +2836,28 @@ export default function ChatView(props: ChatViewProps) {
           ]
         : [];
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
-    const extensionStatusBanner = extensionStatusBannerItem(
-      deriveProviderExtensionStatuses(serverProjection),
-    );
+    const visibleStatuses = extensionStatuses.filter(({ key }) => key !== PI_FOOTER_METRICS_STATUS);
+    if (livePiMode === undefined && fallbackPiMode !== undefined) {
+      visibleStatuses.unshift({
+        key: "plan-mode",
+        text: fallbackPiMode === "plan" ? gt("plan mode") : gt("build mode"),
+      });
+    }
+    if (
+      nativePiStatus &&
+      livePiMode === undefined &&
+      !visibleStatuses.some(({ key }) => key === "lean-jobs")
+    ) {
+      const { shells, subagents } = nativePiStatus;
+      const text = [
+        shells ? `${shells} shell${shells === 1 ? "" : "s"}` : "",
+        subagents ? `${subagents} subagent${subagents === 1 ? "" : "s"}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      if (text) visibleStatuses.push({ key: "lean-jobs", text });
+    }
+    const extensionStatusBanner = extensionStatusBannerItem(visibleStatuses);
     const extensionStatusItems = extensionStatusBanner === null ? [] : [extensionStatusBanner];
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
@@ -3098,7 +3161,7 @@ export default function ChatView(props: ChatViewProps) {
     scrollToEnd,
     setThreadError,
   });
-  const { onSend, captureDetachedSend } = useComposerSend({
+  const { onSend, captureDetachedSend, sendPiModeCommand } = useComposerSend({
     environmentId,
     routeThreadKey,
     currentRouteThreadKeyRef,
@@ -3186,6 +3249,14 @@ export default function ChatView(props: ChatViewProps) {
     });
   };
   const onWorktreeSetupWorkLocallyStable = useStableCallback(onWorktreeSetupWorkLocally);
+  const togglePiModeStable = useStableCallback((command: "/plan on" | "/plan off") => {
+    if (!activeThread) return;
+    if (isWorking || isSendBusy || phase === "connecting") {
+      setThreadError(activeThread.id, gt("Wait for the current turn before switching Pi mode."));
+      return;
+    }
+    void sendPiModeCommand(command);
+  });
   const onComposerSendStable = useStableCallback(onSend);
   const sendPreviewAnnotation = (
     annotation: PreviewAnnotationPayload,
@@ -3635,7 +3706,8 @@ export default function ChatView(props: ChatViewProps) {
                   {...(activeProject && !runsOutsideHostCheckout
                     ? { onRunShellCommand: parentPanel?.runShellCommand ?? runShellCommandStable }
                     : {})}
-                  isWorking={isWorking}
+                  isWorking={timelineIsWorking}
+                  hidePiModeCommands={selectedProvider === "pi"}
                   runlessWorkActive={runlessWorkStartedAt !== null}
                   isCompacting={isCompacting}
                   awaitingUser={
@@ -3823,6 +3895,22 @@ export default function ChatView(props: ChatViewProps) {
                               <ChatComposer
                                 canOperateThread={canOperateThread}
                                 reportedModelSelection={reportedModelSelection}
+                                piContextWindow={
+                                  selectedProvider === "pi" &&
+                                  activeProviderThread?.providerInstanceId ===
+                                    activeProviderInstanceId
+                                    ? activeContextWindow
+                                    : null
+                                }
+                                piFooterMetrics={
+                                  selectedProvider === "pi" &&
+                                  activeProviderThread?.providerInstanceId ===
+                                    activeProviderInstanceId
+                                    ? extensionStatuses.find(
+                                        ({ key }) => key === PI_FOOTER_METRICS_STATUS,
+                                      )?.text
+                                    : undefined
+                                }
                                 multipleModelSelections={multipleModelSelections}
                                 supportsMultipleModels={
                                   serverConfig?.environment.capabilities
@@ -3851,7 +3939,7 @@ export default function ChatView(props: ChatViewProps) {
                                 }
                                 phase={phase}
                                 canSteer={canSteer}
-                                canInterrupt={canInterruptRunningThread}
+                                canInterrupt={canInterruptRunningThread && !quietPiModeChange}
                                 isSendBusy={
                                   (isSendBusy && !sendQueuesBehindSetup) ||
                                   (setupQueueSendThreadKey !== null &&
@@ -3902,6 +3990,16 @@ export default function ChatView(props: ChatViewProps) {
                                 pendingApprovals={pendingApprovals}
                                 onHeldRequestIdsChange={onHeldRequestIdsChange}
                                 pendingUserInputs={pendingUserInputs}
+                                {...(piMode === undefined ? {} : { piMode })}
+                                {...(canOperateThread &&
+                                selectedProvider === "pi" &&
+                                (activeProviderThread == null || piMode !== undefined) &&
+                                !activePendingApproval &&
+                                !activePendingUserInput &&
+                                activeThread &&
+                                activeProject
+                                  ? { onTogglePiMode: togglePiModeStable }
+                                  : {})}
                                 activePendingIsResponding={activePendingIsResponding}
                                 respondingRequestIds={respondingRequestIds}
                                 runtimeMode={runtimeMode}
@@ -4268,6 +4366,9 @@ export default function ChatView(props: ChatViewProps) {
       {embedded ? null : <LinkPullRequestDialogHost />}
       <ThreadVisitWatermark threadRef={routeThreadRef} />
       <ExpandedImageDialogHost threadKey={routeThreadKey} />
+      {!embedded && canOperateThread && activeProject && !activeProject.isScratch ? (
+        <NativePiProjectRefresh project={activeProject} />
+      ) : null}
     </div>
   );
   return (
@@ -4287,6 +4388,93 @@ function preventMiddleClickPasteOutsideEditable(event: ReactMouseEvent) {
   if (event.button !== 1 || isEditableFocused(event.target)) return;
   event.preventDefault();
 }
+
+function useNativePiStatus(thread: ScopedThreadRef | null, sessionFile: string | null | undefined) {
+  const environmentId = thread?.environmentId;
+  const threadId = thread?.threadId;
+  const key = thread && sessionFile ? JSON.stringify([environmentId, threadId, sessionFile]) : null;
+  const [snapshot, setSnapshot] = useState<{ key: string; status: PiSessionStatus } | null>(null);
+  const read = useStableCallback(useAtomCommand(piSessionStatus, { reportFailure: false }));
+  // Polls the owning Pi process for live job counts while the thread is visible.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps a timer and visibility listener in step with the open thread
+  useEffect(() => {
+    if (!environmentId || !threadId || key === null) return;
+    let disposed = false;
+    let busy = false;
+    const poll = async () => {
+      if (busy || disposed || document.visibilityState !== "visible") return;
+      busy = true;
+      try {
+        const result = await read({ environmentId, input: { threadId } });
+        if (disposed) return;
+        setSnapshot((previous) => {
+          const old = previous?.key === key ? previous.status : undefined;
+          const status =
+            result._tag === "Success"
+              ? result.value
+              : { mode: old?.mode ?? null, shells: 0, subagents: 0 };
+          return old &&
+            old.mode === status.mode &&
+            old.shells === status.shells &&
+            old.subagents === status.subagents
+            ? previous
+            : { key, status };
+        });
+      } finally {
+        busy = false;
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 2_000);
+    document.addEventListener("visibilitychange", poll);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", poll);
+    };
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- read is a stable callback
+  }, [environmentId, threadId, key, read]);
+  return snapshot?.key === key ? snapshot.status : undefined;
+}
+
+function NativePiProjectRefresh({
+  project,
+}: {
+  readonly project: NonNullable<ReturnType<typeof useProject>>;
+}) {
+  const { id: projectId, environmentId, workspaceRoot } = project;
+  const refreshSessions = useStableCallback(
+    useAtomCommand(agentSessionImport, { reportFailure: false }),
+  );
+  // Refreshes native Pi sessions for the open project every minute while visible.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps a timer and visibility listener in step with the open project
+  useEffect(() => {
+    let inFlight = false;
+    const refresh = async () => {
+      if (inFlight || document.visibilityState !== "visible") return;
+      inFlight = true;
+      try {
+        await refreshSessions({
+          environmentId,
+          input: { projectId, expectedWorkspaceRoot: workspaceRoot, refreshNativePi: true },
+        });
+      } finally {
+        inFlight = false;
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 60_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- refreshSessions is a stable callback
+  }, [environmentId, projectId, refreshSessions, workspaceRoot]);
+  return null;
+}
+
+const PI_FOOTER_METRICS_STATUS = "t3.pi.footer-metrics";
 
 function PreviewSessionSync(props: { readonly threadRef: ScopedThreadRef }) {
   usePreviewSession(props.threadRef);

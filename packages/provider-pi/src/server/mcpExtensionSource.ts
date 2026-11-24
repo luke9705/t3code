@@ -10,6 +10,13 @@ export const T3_PI_RUNTIME_MODE_ENV = "T3_PI_RUNTIME_MODE";
 export const T3_PI_MCP_EXTENSION_PATH_ENV = "T3_PI_MCP_EXTENSION_PATH";
 export const PI_T3_SERVICE_TIER_COMMAND = "t3-service-tier";
 
+// Disabled in Pi Code so Pi owns its prompt, tools, and approval policy.
+export const PI_CODE_T3_BRIDGE = {
+  systemPromptGuidance: false,
+  mcpTools: false,
+  toolApprovals: false,
+};
+
 // These tools trigger file-change approvals, bypassed by Auto-accept edits.
 export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
 
@@ -26,6 +33,7 @@ const RUNTIME_MODE_ENV = ${JSON.stringify(T3_PI_RUNTIME_MODE_ENV)};
 const EXTENSION_PATH_ENV = ${JSON.stringify(T3_PI_MCP_EXTENSION_PATH_ENV)};
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim())};
 const PULL_REQUEST_LINKING_INSTRUCTIONS = ${JSON.stringify(PULL_REQUEST_LINKING_INSTRUCTIONS)};
+const BRIDGE = ${JSON.stringify(PI_CODE_T3_BRIDGE)};
 const SERVICE_TIER_COMMAND = ${JSON.stringify(PI_T3_SERVICE_TIER_COMMAND)};
 const PROTOCOL = "2025-06-18";
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
@@ -252,7 +260,137 @@ function createMcpClient(endpoint: string, token: string) {
   };
 }
 
+// Pi's terminal footer only runs in TUI mode. Publish the same measurements via RPC.
+function registerFooterMetrics(pi: ExtensionAPI) {
+  const firstTokens = new Map<number, number>();
+  const statusKey = "t3.pi.footer-metrics";
+  let lastStatus: string | undefined;
+  let baseline: { model: string; compactions: number; prompt: number; cacheRead: number } | undefined;
+  // The assistant message streaming now. Pi stores a message only after message_end,
+  // so it is tracked here and handed to publish() while it streams and when it ends.
+  type LiveMessage = {
+    readonly role: string;
+    readonly timestamp: number;
+    readonly durationMs?: number;
+    readonly usage: { readonly input: number; readonly cacheRead: number; readonly cacheWrite: number; readonly output: number };
+  };
+  let live: { message: LiveMessage; ctx: ExtensionContext } | undefined;
+  let liveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function publish(ctx: ExtensionContext, model = ctx.model, latest?: LiveMessage) {
+    if (ctx.mode !== "rpc") return;
+    let prompt = 0;
+    let cacheRead = 0;
+    let compactions = 0;
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type === "compaction") {
+        compactions++;
+        prompt = cacheRead = 0;
+      } else if (entry.type === "message" && entry.message.role === "assistant") {
+        const usage = entry.message.usage;
+        prompt += usage.input + usage.cacheRead + usage.cacheWrite;
+        cacheRead += usage.cacheRead;
+      }
+    }
+    if (latest) {
+      prompt += latest.usage.input + latest.usage.cacheRead + latest.usage.cacheWrite;
+      cacheRead += latest.usage.cacheRead;
+    }
+    const key = model?.provider + "/" + model?.id;
+    if (!baseline || baseline.compactions !== compactions) {
+      baseline = { model: key, compactions, prompt: 0, cacheRead: 0 };
+    } else if (baseline.model !== key) {
+      baseline = { model: key, compactions, prompt, cacheRead };
+    }
+
+    const recent: LiveMessage[] = ctx.sessionManager.buildSessionProjection().messages.filter(
+      (message) => message.role === "assistant" && message.stopReason !== "error" && message.stopReason !== "aborted",
+    ).slice(-10);
+    if (latest) recent.push(latest);
+    let output = 0;
+    let duration = 0;
+    let firstTokenSum = 0;
+    let firstTokenCount = 0;
+    const now = Date.now();
+    for (const message of recent) {
+      if (message.role !== "assistant") continue;
+      // A streaming message has no duration yet; count it only once the provider reports output tokens.
+      const durationMs = message.durationMs ?? (message === latest ? now - message.timestamp : undefined);
+      if (durationMs != null && durationMs > 0 && (message.durationMs != null || message.usage.output > 0)) {
+        output += message.usage.output;
+        duration += durationMs;
+      }
+      const ttft = firstTokens.get(message.timestamp);
+      if (ttft !== undefined) {
+        firstTokenSum += ttft;
+        firstTokenCount++;
+      }
+    }
+    const promptDelta = prompt - baseline.prompt;
+    const cache = promptDelta > 0
+      ? Math.max(0, Math.min(100, (cacheRead - baseline.cacheRead) / promptDelta * 100)).toFixed(1) + "%"
+      : "~";
+    const ttft = firstTokenCount ? (firstTokenSum / firstTokenCount / 1000).toFixed(1) + "s" : "~";
+    const label = duration || firstTokenCount || promptDelta > 0
+      ? [duration ? (output * 1000 / duration).toFixed(1) + " tok/s" : undefined,
+        "TTFT " + ttft, "Cache " + cache].filter(Boolean).join(" · ")
+      : undefined;
+    if (label !== lastStatus) {
+      lastStatus = label;
+      ctx.ui.setStatus(statusKey, label);
+    }
+  }
+
+  function stopLive(): void {
+    if (liveTimer !== undefined) clearTimeout(liveTimer);
+    liveTimer = undefined;
+    live = undefined;
+  }
+  pi.on("session_start", (_event, ctx) => {
+    firstTokens.clear();
+    baseline = undefined;
+    lastStatus = undefined;
+    stopLive();
+    publish(ctx);
+  });
+  pi.on("message_update", (event, ctx) => {
+    if (ctx.mode !== "rpc" || event.message.role !== "assistant") return;
+    const arrived = !firstTokens.has(event.message.timestamp);
+    if (arrived) {
+      const update = event.assistantMessageEvent;
+      if ((update.type !== "text_delta" && update.type !== "thinking_delta" && update.type !== "toolcall_delta") || !update.delta) return;
+      if (firstTokens.size >= 32) {
+        const oldest = firstTokens.keys().next().value;
+        if (oldest !== undefined) firstTokens.delete(oldest);
+      }
+      firstTokens.set(event.message.timestamp, Math.max(0, Date.now() - event.message.timestamp));
+    }
+    live = { message: event.message, ctx };
+    // Publish the new first-token time once, then at most twice a second while usage streams in.
+    if ((arrived || event.message.usage.output > 0) && liveTimer === undefined) {
+      liveTimer = setTimeout(() => {
+        liveTimer = undefined;
+        if (live) publish(live.ctx, undefined, live.message);
+      }, 500);
+    }
+  });
+  pi.on("message_end", (event, ctx) => {
+    stopLive();
+    if (ctx.mode !== "rpc" || event.message.role !== "assistant") return;
+    // Extensions see message_end before the session stores the message, so pass it in directly.
+    publish(ctx, undefined, event.message);
+  });
+  pi.on("agent_settled", (_event, ctx) => {
+    stopLive();
+    publish(ctx);
+  });
+  pi.on("session_compact", (_event, ctx) => publish(ctx));
+  pi.on("session_tree", (_event, ctx) => publish(ctx));
+  pi.on("model_select", ({ model }, ctx) => publish(ctx, model));
+}
+
 export default async function t3McpExtension(pi: ExtensionAPI) {
+  registerFooterMetrics(pi);
   // RPC has no trust prompt, so Pi skips an untrusted folder's protected resources. Session
   // replacement reruns this factory without project_trust, and T3 drops notices outside a turn,
   // so check each session's first turn. An explicit --no-approve is deliberate and stays quiet.
@@ -362,25 +500,28 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
       NodePath.resolve(tool.sourceInfo.path) === NodePath.resolve(extensionPath));
   };
 
-  pi.on("tool_call", async (event, ctx) => {
-    const mode = runtimeMode();
-    if (mode === "full-access") return;
-    if ((event.toolName === "tool_search" ? hasBuiltinToolSearch() : READ_ONLY_TOOLS.has(event.toolName)) || isReadOnlyMcpTool(event.toolName)) {
-      return;
-    }
-    if (mode === "auto-accept-edits" && FILE_CHANGE_TOOLS.has(event.toolName)) {
-      return;
-    }
-    const approved = await ctx.ui.confirm(
-      \`Allow \${event.toolName}?\`,
-      toolInputSummary(event.input),
-      { signal: ctx.signal },
-    );
-    if (!approved) {
-      return { block: true, reason: \`\${event.toolName} was declined in T3 Code.\` };
-    }
-  });
+  if (BRIDGE.toolApprovals) {
+    pi.on("tool_call", async (event, ctx) => {
+      const mode = runtimeMode();
+      if (mode === "full-access") return;
+      if ((event.toolName === "tool_search" ? hasBuiltinToolSearch() : READ_ONLY_TOOLS.has(event.toolName)) || isReadOnlyMcpTool(event.toolName)) {
+        return;
+      }
+      if (mode === "auto-accept-edits" && FILE_CHANGE_TOOLS.has(event.toolName)) {
+        return;
+      }
+      const approved = await ctx.ui.confirm(
+        \`Allow \${event.toolName}?\`,
+        toolInputSummary(event.input),
+        { signal: ctx.signal },
+      );
+      if (!approved) {
+        return { block: true, reason: \`\${event.toolName} was declined in T3 Code.\` };
+      }
+    });
+  }
 
+  if (!BRIDGE.mcpTools) return;
   const endpoint = env(URL_ENV);
   const token = env(TOKEN_ENV);
   if (endpoint === undefined || token === undefined) {
@@ -529,6 +670,7 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   // Keep guidance in the system prompt so leading slash commands still expand.
   pi.on("before_agent_start", (event, ctx) => {
     reconcileDiscovery(ctx);
+    if (!BRIDGE.systemPromptGuidance) return;
     const instructions = ORCHESTRATION_INSTRUCTIONS + "\\n\\n" + PULL_REQUEST_LINKING_INSTRUCTIONS;
     const sections = event.systemPromptOptions?.sections;
     if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {

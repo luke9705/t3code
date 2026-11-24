@@ -497,6 +497,32 @@ export const layer: Layer.Layer<
                 }),
               ];
             }
+            case "thread_title.updated": {
+              const { threadId, providerThreadId } = input.event;
+              const thread = yield* projections.getThread(threadId).pipe(
+                Effect.catchTags({
+                  ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+                }),
+              );
+              const title = input.event.title?.trim() || "New thread";
+              if (
+                thread === null ||
+                thread.deletedAt !== null ||
+                thread.providerInstanceId !== input.providerInstanceId ||
+                thread.activeProviderThreadId !== providerThreadId ||
+                thread.title === title
+              )
+                return [];
+              const now = yield* DateTime.now;
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "thread.metadata-updated",
+                  threadId,
+                  payload: { ...thread, title, titleRegeneration: null, updatedAt: now },
+                  occurredAt: now,
+                }),
+              ];
+            }
             case "thread_model_selection.updated": {
               const { instanceId, changes } = input.event;
               const thread = yield* projections.getThread(input.event.threadId).pipe(
@@ -919,7 +945,8 @@ export const layer: Layer.Layer<
               (effect) =>
                 input.event.type === "app_thread.created"
                   ? threadCommands.withLock(input.event.appThread.id, effect)
-                  : input.event.type === "thread_model_selection.updated"
+                  : input.event.type === "thread_model_selection.updated" ||
+                      input.event.type === "thread_title.updated"
                     ? threadCommands.withLock(input.event.threadId, effect)
                     : effect,
             ),

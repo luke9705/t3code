@@ -74,6 +74,7 @@ import {
   clearBackgroundDraftSubmissionByRef,
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
+  setQuietDraftPromotion,
   restoreFailedDraftThread,
   checkoutPullRequestUrlToLink,
   composerDraftHasUserContent,
@@ -1429,14 +1430,17 @@ export function useComposerSend(input: ComposerSendInput) {
       composerRef.current?.resetCursorState();
     }
 
-    const title = deriveThreadTitleSeed(
-      {
-        text: messageTextForSend,
-        attachments: composerAttachmentsSnapshot,
-        fallbackLabels: sendTitleFallbackLabels(sendSnapshot),
-      },
-      m,
-    );
+    const title =
+      ctxSelectedProvider === "pi"
+        ? m(msg("New thread"))
+        : deriveThreadTitleSeed(
+            {
+              text: messageTextForSend,
+              attachments: composerAttachmentsSnapshot,
+              fallbackLabels: sendTitleFallbackLabels(sendSnapshot),
+            },
+            m,
+          );
     const threadCreateModelSelection = createModelSelection(
       ctxSelectedModelSelection.instanceId,
       ctxSelectedModel || activeProjectDefaultModelSelection?.model || DEFAULT_MODEL,
@@ -1781,5 +1785,103 @@ export function useComposerSend(input: ComposerSendInput) {
   // No load-balancing refresh: it bails once the draft is no longer displayed, which is the
   // only time a detached send runs, so the draft keeps the environment it was dictated for.
   const captureDetachedSend = useStableCallback(() => onSend);
-  return { onSend: onSendWithRouting, captureDetachedSend };
+  const sendPiModeCommand = async (text: "/plan on" | "/plan off") => {
+    if (!activeThread || !activeProject || !clientSettingsHydrated || sendInFlightRef.current)
+      return;
+    const context = composerRef.current?.getSendContext();
+    if (context?.selectedProvider !== "pi" || !context.providerAvailable) return;
+
+    const { baseBranchForWorktree, missingWorktreeBaseBranch } = planComposerTurn({
+      messageText: text,
+      sendQueuesBehindSetup: false,
+      isServerThread,
+      activeMessageCount,
+      sendEnvMode,
+      worktreePath: activeThread.worktreePath,
+      activeThreadBranch,
+      projectIsGitRepo: isGitRepo,
+      plainProjectBaseBranch: readWorktreeBaseBranch(activeProject),
+      isScratchProject: activeProjectIsScratch,
+      resumeCompactionTokens: null,
+      keepFullHistory: true,
+      phase,
+      dispatchMode: "auto",
+      freshContext: false,
+    });
+    if (missingWorktreeBaseBranch) {
+      setThreadError(
+        activeThread.id,
+        m(msg("Select a base branch before sending in New worktree mode.")),
+      );
+      return;
+    }
+    const bootstrap =
+      isLocalDraftThread || baseBranchForWorktree
+        ? {
+            ...(isLocalDraftThread
+              ? {
+                  createThread: {
+                    projectId: activeProject.id,
+                    title: activeThread.title,
+                    modelSelection: context.selectedModelSelection,
+                    runtimeMode,
+                    interactionMode: DEFAULT_INTERACTION_MODE,
+                    branch: activeThreadBranch,
+                    worktreePath: activeThread.worktreePath,
+                    createdAt: activeThread.createdAt,
+                  },
+                }
+              : {}),
+            ...(baseBranchForWorktree
+              ? {
+                  prepareWorktree: {
+                    projectCwd: activeProject.workspaceRoot,
+                    baseBranch: baseBranchForWorktree,
+                    ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                    ...(worktreeRepositories ? { repositories: worktreeRepositories } : {}),
+                    runSetupScript: true,
+                  },
+                }
+              : {}),
+          }
+        : undefined;
+    const quietPromotion = isLocalDraftThread
+      ? scopeThreadRef(environmentId, activeThread.id)
+      : null;
+    if (quietPromotion) setQuietDraftPromotion(quietPromotion, true);
+    sendInFlightRef.current = true;
+    setThreadError(activeThread.id, null);
+    const result = await startThreadTurn({
+      environmentId,
+      input: {
+        threadId: activeThread.id,
+        message: { messageId: newMessageId(), role: "user", text, attachments: [] },
+        modelSelection: context.selectedModelSelection,
+        runtimeMode,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        dispatchMode: "start",
+        ...(bootstrap ? { bootstrap } : {}),
+      },
+    }).finally(() => {
+      sendInFlightRef.current = false;
+    });
+    if (result._tag === "Failure" && quietPromotion) setQuietDraftPromotion(quietPromotion, false);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      if (
+        isLocalDraftThread &&
+        draftId &&
+        draftThread &&
+        wasBootstrapThreadDeleted(squashAtomCommandFailure(result))
+      ) {
+        restoreFailedDraftThread(draftId, draftThread, newThreadId());
+      }
+      setThreadError(
+        activeThread.id,
+        thrownErrorMessage(squashAtomCommandFailure(result), m) ??
+          m(msg("Could not switch Pi mode.")),
+      );
+    }
+  };
+
+  return { onSend: onSendWithRouting, captureDetachedSend, sendPiModeCommand };
 }

@@ -388,6 +388,8 @@ function sessionScopedArtifactThreadId(
   event: ProviderAdapter.ProviderAdapterV2Event,
 ): ThreadId | undefined {
   switch (event.type) {
+    case "thread_title.updated":
+      return event.threadId;
     case "provider_thread.updated":
       return event.sessionScoped === true
         ? (event.providerThread.appThreadId ?? undefined)

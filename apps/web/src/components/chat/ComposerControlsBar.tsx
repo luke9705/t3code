@@ -21,6 +21,8 @@ import {
 } from "@t3tools/contracts";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { cn } from "~/lib/utils";
+import { formatContextWindowTokens } from "~/lib/contextWindow";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { resolveComposerTraitsInput } from "./composerProviderState";
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
 import { useStableCallback } from "../../hooks/useStableCallback";
@@ -40,6 +42,51 @@ import { resolveComposerControlsOwnership } from "./composerControlsOwnership";
 // Model and effort share one trigger; it stays filled while its popup is open.
 const MODEL_TRIGGER_STATES = "data-popup-open:bg-accent data-popup-open:text-foreground";
 
+function PiContextRing({ usage }: { usage: NonNullable<ChatComposerProps["piContextWindow"]> }) {
+  const gt = useGT();
+  const used = formatContextWindowTokens(usage.usedTokens);
+  const percent = usage.usedPercentage;
+  const label =
+    percent !== null && usage.maxTokens != null
+      ? gt("Context: {percent}% used · {used} / {total} tokens", {
+          percent: Math.round(percent),
+          used,
+          total: formatContextWindowTokens(usage.maxTokens),
+        })
+      : gt("Context: {used} tokens used", { used });
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            tabIndex={0}
+            aria-label={label}
+            data-pi-context-ring
+            className="inline-flex shrink-0 items-center rounded-full p-0.5 text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          />
+        }
+      >
+        <svg aria-hidden="true" viewBox="0 0 16 16" className="size-4" fill="none" strokeWidth="2">
+          <circle cx="8" cy="8" r="6" stroke="currentColor" className="opacity-30" />
+          {percent !== null && percent > 0 ? (
+            <circle
+              cx="8"
+              cy="8"
+              r="6"
+              pathLength="100"
+              stroke="currentColor"
+              strokeDasharray={`${percent} 100`}
+              transform="rotate(-90 8 8)"
+            />
+          ) : null}
+        </svg>
+      </TooltipTrigger>
+      <TooltipPopup side="top">{label}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 export function ComposerControlsBar(props: {
   environmentId: EnvironmentId;
   workspaceCwd: string | null;
@@ -52,6 +99,8 @@ export function ComposerControlsBar(props: {
   selectedProviderModels: ServerProvider["models"];
   composerModelOptions: ReturnType<typeof useComposerProviderModel>["composerModelOptions"];
   reportedModelSelection: ChatComposerProps["reportedModelSelection"];
+  piContextWindow?: ChatComposerProps["piContextWindow"];
+  piFooterMetrics?: string | undefined;
   promptUltrathink: PromptUltrathink;
   onPromptEdit: (edit: (prompt: string) => string) => void;
   effortDisplay: EffortDisplay;
@@ -265,6 +314,30 @@ export function ComposerControlsBar(props: {
     </ComposerControl>
   ) : (
     <>
+      {selectedProvider === "pi" && props.piContextWindow ? (
+        <PiContextRing usage={props.piContextWindow} />
+      ) : null}
+      {selectedProvider === "pi" && props.piFooterMetrics && !composerControlsCollapsed ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                data-pi-footer-metrics
+                tabIndex={0}
+                className="me-1 hidden min-w-0 truncate whitespace-nowrap text-xs text-muted-foreground tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring @min-[32rem]/composer-surface:block"
+              />
+            }
+          >
+            {props.piContextWindow ? (
+              <span aria-hidden="true" className="me-1.5">
+                ·
+              </span>
+            ) : null}
+            {props.piFooterMetrics}
+          </TooltipTrigger>
+          <TooltipPopup side="top">{props.piFooterMetrics}</TooltipPopup>
+        </Tooltip>
+      ) : null}
       {composerModelPicker}
 
       <>

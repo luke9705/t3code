@@ -515,6 +515,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   issues: Schema.optional(Schema.Array(ThreadIssueLink)),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
+  savedPiMode: Schema.optionalKey(Schema.NullOr(Schema.Literals(["build", "plan"]))),
   linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
   delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
   workflowRun: Schema.optional(OrchestrationV2WorkflowOrigin),

@@ -1229,6 +1229,10 @@ export function formatOutgoingPrompt(params: {
   return applyClaudePromptEffortPrefix(params.text, promptEffort);
 }
 
+export function isPiModeCommand(text: string): boolean {
+  return /^\/plan\s+(?:on|off)$/.test(text.trim());
+}
+
 export function isCompactCommandMessage(message: ChatMessage): boolean {
   const text = message.text.trim().toLowerCase();
   return message.role === "user" && text === "/compact" && !message.attachments?.length;

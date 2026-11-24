@@ -300,6 +300,7 @@ import {
 } from "./preparingComposerImages";
 import { HELD_COMPOSER_SEND_BANNER_ID } from "./ComposerHeldSendBanner";
 import { ComposerControlsBar } from "./ComposerControlsBar";
+import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
 import { composerCommandKeyHandler } from "./composerCommandKey";
 import { promptSuggestionToAccept, usePromptSuggestion } from "./usePromptSuggestion";
 import { useFreshSessionArmed } from "./freshSessionArms";
@@ -418,6 +419,8 @@ export interface ChatComposerProps {
   pendingApprovals: PendingApproval[];
   onHeldRequestIdsChange: (requestIds: ReadonlySet<string>) => void;
   pendingUserInputs: PendingUserInput[];
+  piMode?: "build" | "plan";
+  onTogglePiMode?: (command: "/plan on" | "/plan off") => void;
   activePendingIsResponding: boolean;
   respondingRequestIds: RuntimeRequestId[];
 
@@ -430,6 +433,8 @@ export interface ChatComposerProps {
   activeProjectDefaultModelSelection: ModelSelection | null | undefined;
   activeThreadModelSelection: ModelSelection | null | undefined;
   reportedModelSelection?: ModelSelection | null;
+  piContextWindow?: ContextWindowSnapshot | null | undefined;
+  piFooterMetrics?: string | undefined;
   activeProjectId: ProjectId | null;
   projectName?: string | undefined;
 
@@ -2560,6 +2565,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       : null;
 
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem?: boolean) => {
+    if (
+      key === "Tab" &&
+      event.shiftKey &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.isComposing &&
+      selectedProvider === "pi" &&
+      props.onTogglePiMode &&
+      (props.piMode !== undefined ||
+        selectedProviderSlashCommands.some(({ name }) => name === "plan")) &&
+      !composerSuggestionListVisible &&
+      !isComposerModelPickerOpen &&
+      !(
+        event.currentTarget instanceof HTMLElement && event.currentTarget.closest('[role="dialog"]')
+      ) &&
+      !activePendingApproval &&
+      pendingUserInputs.length === 0
+    ) {
+      if (!event.repeat) props.onTogglePiMode(props.piMode === "plan" ? "/plan off" : "/plan on");
+      return true;
+    }
     if (key === "Escape" && composerSendHeld && !event.isComposing) {
       cancelHeldSend();
       return true;
@@ -2693,6 +2720,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedProviderModels={selectedProviderModels}
       composerModelOptions={composerModelOptions}
       reportedModelSelection={reportedModelSelection}
+      piContextWindow={props.piContextWindow}
+      piFooterMetrics={props.piFooterMetrics}
       promptUltrathink={promptUltrathink}
       onPromptEdit={editPromptFromTraitsStable}
       compatibleRuntimeMode={compatibleRuntimeMode}

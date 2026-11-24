@@ -7496,7 +7496,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         (command.createdBy === "user" &&
           // A draft opened by `/compact` is titled after it, so only a chosen title stays here.
           projection.thread.titleRenamed !== true &&
-          (yield* onlyMaintenanceHistory)))
+          (yield* onlyMaintenanceHistory))) &&
+      (yield* providerAdapters
+        .get(command.modelSelection?.instanceId ?? projection.thread.providerInstanceId)
+        .pipe(
+          Effect.map((adapter) => adapter.driver !== "pi"),
+          Effect.orElseSucceed(() => true),
+        ))
     ) {
       const now = yield* DateTime.now;
       const thread: OrchestrationV2AppThread = {

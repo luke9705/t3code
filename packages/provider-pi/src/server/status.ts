@@ -26,6 +26,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
+import { PI_CODE_T3_BRIDGE } from "./mcpExtensionSource.ts";
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import {
   makePiRpcConnection,
@@ -59,7 +60,9 @@ import {
 const PI_PRESENTATION = {
   displayName: "Pi",
   showInteractionModeToggle: false,
-  supportedRuntimeModes: ["approval-required", "auto-accept-edits", "full-access"],
+  supportedRuntimeModes: PI_CODE_T3_BRIDGE.toolApprovals
+    ? (["approval-required", "auto-accept-edits", "full-access"] as const)
+    : (["full-access"] as const),
   reportsContextWindow: true,
 } as const;
 
@@ -80,6 +83,7 @@ const PI_DEFAULT_MODEL: ServerProviderModel = {
 
 interface PiDiscovery extends PiDiscoveredCommands {
   readonly models: ReadonlyArray<ServerProviderModel>;
+  readonly defaultModelLabel: string | undefined;
   readonly authenticated: boolean;
   /** Pi's active model when Pi lists no model of its provider, so it cannot start a turn. */
   readonly unavailableActiveModel: { readonly provider: string; readonly id: string } | undefined;
@@ -90,9 +94,10 @@ interface PiDiscovery extends PiDiscoveredCommands {
 function piModelsFromSettings(
   customModels: ReadonlyArray<CustomModelSetting> | undefined,
   discovered: ReadonlyArray<ServerProviderModel> = [],
+  defaultModelLabel?: string,
 ): ReadonlyArray<ServerProviderModel> {
   return providerModelsFromSettings(
-    [PI_DEFAULT_MODEL, ...discovered],
+    [{ ...PI_DEFAULT_MODEL, name: defaultModelLabel ?? PI_DEFAULT_MODEL.name }, ...discovered],
     customModels ?? [],
     EMPTY_PI_MODEL_CAPABILITIES,
   );
@@ -146,6 +151,7 @@ const makePiDiscoveryConnection = Effect.fnUntraced(function* (
   launchArgs: ReadonlyArray<string>,
   cwd?: string,
   textGenerationLaunch = false,
+  observeEvent?: Parameters<typeof makePiRpcConnection>[0]["observeEvent"],
 ) {
   const launch = buildPiRpcLaunch({
     launchArgs,
@@ -162,6 +168,7 @@ const makePiDiscoveryConnection = Effect.fnUntraced(function* (
     args: launch.args,
     cwd,
     env: launch.env,
+    ...(observeEvent === undefined ? {} : { observeEvent }),
   });
   yield* Stream.fromQueue(connection.events).pipe(
     Stream.runDrain,
@@ -278,7 +285,21 @@ const discoverPiViaRpc = Effect.fn("PiProviderStatus.discoverPiViaRpc")(function
   const activeModel = recordField(stateData, "model");
   const activeProvider = recordString(activeModel, "provider");
   const activeModelId = recordString(activeModel, "id");
+  const activeModelSlug =
+    activeProvider !== undefined && activeModelId !== undefined
+      ? `${activeProvider}/${activeModelId}`
+      : undefined;
+  const defaultName = recordString(activeModel, "name") ?? activeModelSlug;
+  const thinking = piModelCapabilities(
+    activeModel,
+    recordString(stateData, "thinkingLevel"),
+  ).optionDescriptors?.find((descriptor) => descriptor.id === "thinking");
+  const effort =
+    thinking?.type === "select"
+      ? thinking.options.find((option) => option.isDefault && option.id !== "off")?.label
+      : undefined;
   return {
+    defaultModelLabel: defaultName && effort ? `${defaultName} ${effort}` : defaultName,
     models:
       textGenerationModelSlugs === undefined
         ? discoveredModels
@@ -306,11 +327,27 @@ export const discoverPiCommandsForCwd = Effect.fn("discoverPiCommandsForCwd")(
     if (!launchArgs.ok) {
       return yield* new PiRpcError({ operation: "launch", detail: launchArgs.message });
     }
+    let initialPiMode: "plan" | "build" | undefined;
     const connection = yield* makePiDiscoveryConnection(
       piSettings,
       providerProbeEnvironment(environment),
       launchArgs.args,
       cwd,
+      false,
+      (event) => {
+        if (
+          event.type === "extension_ui_request" &&
+          event.method === "setStatus" &&
+          event.statusKey === "plan-mode"
+        ) {
+          initialPiMode =
+            event.statusText === "plan mode"
+              ? "plan"
+              : event.statusText === "build mode"
+                ? "build"
+                : undefined;
+        }
+      },
     );
     // A failed read must not replace a previously usable workspace catalog with an empty one.
     const commandsData = yield* connection.request(
@@ -318,7 +355,11 @@ export const discoverPiCommandsForCwd = Effect.fn("discoverPiCommandsForCwd")(
       resolveProviderProbeTimeoutMs("pi", PI_RPC_DISCOVERY_TIMEOUT_MS, environment),
     );
     const { slashCommands, skills } = parsePiDiscoveredCommands(commandsData);
-    return { slashCommands: withPiBuiltinSlashCommands(slashCommands), skills };
+    return {
+      slashCommands: withPiBuiltinSlashCommands(slashCommands),
+      skills,
+      ...(initialPiMode === undefined ? {} : { initialPiMode }),
+    };
   },
   Effect.scoped,
   (effect, _settings, environment) => {
@@ -627,7 +668,11 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   }
 
   const discovery = discoveryExit.value.value;
-  const models = piModelsFromSettings(piSettings.customModels, discovery.models);
+  const models = piModelsFromSettings(
+    piSettings.customModels,
+    discovery.models,
+    discovery.defaultModelLabel,
+  );
   const message = !discovery.authenticated
     ? "Pi has no usable models. Run `pi` in a terminal and use /login, or configure an API key in ~/.pi/agent."
     : discovery.unavailableActiveModel === undefined

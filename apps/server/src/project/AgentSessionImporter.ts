@@ -262,7 +262,11 @@ const make = Effect.gen(function* () {
         ),
       );
     })).flat();
-    const outcomes = scanner.recentThreads(project.workspaceRoot, completedSources);
+    const outcomes = scanner.recentThreads(
+      project.workspaceRoot,
+      completedSources,
+      input.refreshNativePi,
+    );
     const importedThreadIds = new Set<ThreadId>();
     let importedCount = 0;
     let skippedCount = 0;
@@ -334,18 +338,107 @@ const make = Effect.gen(function* () {
             if (existing.value.thread.historyOrigin !== "v1_import") {
               return yield* new AgentSessionThreadModifiedError({ threadId });
             }
-            // A transcript can change after the import, so record it only when the
-            // thread already holds exactly its messages.
-            const stored = existing.value.messages;
-            if (
-              stored.length !== thread.messages.length ||
-              stored.some(
+            // Browser runs and imported rows use different ordinal ranges. For a
+            // native append, compare in transcript time, not turn-item order.
+            const inTranscriptOrder = (messages: typeof existing.value.messages) =>
+              input.refreshNativePi
+                ? messages.toSorted(
+                    (left, right) =>
+                      DateTime.toEpochMillis(left.createdAt) -
+                      DateTime.toEpochMillis(right.createdAt),
+                  )
+                : messages;
+            const stored = inTranscriptOrder(existing.value.messages);
+            const matches = (message: (typeof stored)[number], index: number) => {
+              const native = thread.messages[index];
+              return native?.role === message.role && native.text === message.text;
+            };
+            let nativeOffset = 0;
+            if (input.refreshNativePi && stored.length > 1 && !matches(stored[1]!, 1)) {
+              // A capped initial import kept the first prompt and a contiguous recent tail.
+              // Align that tail by its timestamp before verifying every cached message.
+              const second = stored[1]!;
+              const start = thread.messages.findIndex(
                 (message, index) =>
-                  message.role !== thread.messages[index]?.role ||
-                  message.text !== thread.messages[index]?.text,
+                  index > 1 &&
+                  matches(second, index) &&
+                  Date.parse(message.createdAt) === DateTime.toEpochMillis(second.createdAt),
+              );
+              if (start < 0) return false;
+              nativeOffset = start - 1;
+            }
+            const appendedMessages = thread.messages.slice(stored.length + nativeOffset);
+            if (
+              (!input.refreshNativePi && stored.length !== thread.messages.length) ||
+              stored.some(
+                (message, index) => !matches(message, index === 0 ? 0 : index + nativeOffset),
               )
             ) {
               return false;
+            }
+            const nativeTitle =
+              input.refreshNativePi && thread.piSessionName !== undefined
+                ? (thread.piSessionName ?? "New thread")
+                : undefined;
+            if (
+              appendedMessages.length > 0 ||
+              (nativeTitle !== undefined && nativeTitle !== existing.value.thread.title) ||
+              (input.refreshNativePi &&
+                (thread.savedPiMode ?? null) !== (existing.value.thread.savedPiMode ?? null))
+            ) {
+              const appended = yield* threadCommands.withLock(
+                threadId,
+                Effect.gen(function* () {
+                  const current = yield* orchestrator.getThreadRecords(threadId, [
+                    "messages",
+                    "runs",
+                  ]);
+                  if (
+                    current.thread.deletedAt !== null ||
+                    current.runs.some((run) => run.completedAt === null) ||
+                    current.messages.length !== stored.length ||
+                    inTranscriptOrder(current.messages).some(
+                      (message, index) =>
+                        message.id !== stored[index]?.id || message.text !== stored[index]?.text,
+                    )
+                  )
+                    return false;
+                  const events = appendedMessages.flatMap((message, index) =>
+                    messageEvents({ threadId, index: stored.length + index, message }),
+                  );
+                  const titleChanged =
+                    nativeTitle !== undefined && nativeTitle !== current.thread.title;
+                  const modeChanged =
+                    input.refreshNativePi &&
+                    (thread.savedPiMode ?? null) !== (current.thread.savedPiMode ?? null);
+                  if (
+                    (titleChanged || modeChanged) &&
+                    current.thread.activeProviderThreadId ===
+                      existing.value.thread.activeProviderThreadId &&
+                    current.thread.providerInstanceId === thread.providerInstanceId
+                  ) {
+                    const now = yield* DateTime.now;
+                    events.push({
+                      id: EventId.make(
+                        `${IMPORT_EVENT_PREFIX}:metadata:${threadId}:${source.mtimeMs}:${source.size}`,
+                      ),
+                      type: "thread.metadata-updated",
+                      threadId,
+                      providerInstanceId: current.thread.providerInstanceId,
+                      occurredAt: now,
+                      payload: {
+                        ...current.thread,
+                        ...(titleChanged ? { title: nativeTitle, titleRegeneration: null } : {}),
+                        ...(modeChanged ? { savedPiMode: thread.savedPiMode ?? null } : {}),
+                        updatedAt: now,
+                      },
+                    });
+                  }
+                  if (events.length > 0) yield* eventSink.write({ events });
+                  return true;
+                }),
+              );
+              if (!appended) return false;
             }
             yield* persistRuntime;
             yield* runtimes.recordImportedTranscript({ threadId, source });
@@ -377,6 +470,7 @@ const make = Effect.gen(function* () {
             branchPullRequest: null,
             activeProviderThreadId: providerThreadId,
             historyOrigin: "v1_import",
+            ...(thread.savedPiMode === undefined ? {} : { savedPiMode: thread.savedPiMode }),
             lineage: {
               parentThreadId: null,
               relationshipToParent: null,

@@ -127,6 +127,8 @@ const TranscriptRecord = Schema.Struct({
   id: Schema.optional(Schema.String),
   parentId: Schema.optional(Schema.NullOr(Schema.String)),
   name: Schema.optional(Schema.String),
+  customType: Schema.optional(Schema.String),
+  data: Schema.optional(Schema.Struct({ enabled: Schema.optional(Schema.Boolean) })),
   timestamp: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
   sessionId: Schema.optional(Schema.String),
@@ -223,6 +225,8 @@ export interface AgentSessionThread {
   readonly providerInstanceId: ProviderInstanceId;
   readonly providerSessionId: string;
   readonly title: string;
+  readonly piSessionName?: string | null;
+  readonly savedPiMode?: "build" | "plan";
   readonly model: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -246,9 +250,14 @@ export class AgentSessionScanner extends Context.Service<
   AgentSessionScanner,
   {
     readonly scan: Effect.Effect<AgentSessionScanResult, AgentSessionScanError>;
+    readonly piSessionStatus: (
+      file: string | undefined,
+      fallbackMode: "build" | "plan" | null,
+    ) => Effect.Effect<{ mode: "build" | "plan" | null; shells: number; subagents: number }>;
     readonly recentThreads: (
       workspaceRoot: string,
       completedSources?: ReadonlyArray<AgentSessionImportSource>,
+      refreshNativePi?: boolean,
     ) => Stream.Stream<AgentSessionRecentThread, AgentSessionScanError>;
   }
 >()("t3/project/AgentSessionScanner") {}
@@ -493,6 +502,21 @@ function activePiBranch(
   return branch.toReversed();
 }
 
+function piModeFromRecord(record: DecodedTranscriptRecord) {
+  if (
+    record.type === "custom" &&
+    record.customType === "plan-mode" &&
+    record.data?.enabled !== undefined
+  ) {
+    return record.data.enabled ? "plan" : "build";
+  }
+  if (record.type === "custom_message") {
+    if (record.customType === "plan-mode-context") return "plan";
+    if (record.customType === "build-mode-context") return "build";
+  }
+  return undefined;
+}
+
 function isPiConversationRecord(
   record: DecodedTranscriptRecord,
 ): record is DecodedTranscriptRecord & {
@@ -525,6 +549,7 @@ function parseAgentSessionRecords(
   records: ReadonlyArray<DecodedTranscriptRecord>,
   claudeFields: ClaudeFields,
   droppedMessageCount: number,
+  messageLimit = MAX_IMPORTED_MESSAGES,
 ): AgentSessionThread | "empty" | null {
   const fallbackTimestamp = DateTime.formatIso(DateTime.makeUnsafe(input.lastActiveAtMs));
   // Claude filenames are session IDs. Codex rollout filenames include extra
@@ -536,10 +561,12 @@ function parseAgentSessionRecords(
         ? records.find((record) => record.type === "session")?.id?.trim() || input.fallbackSessionId
         : (claudeFields.sessionId ?? input.fallbackSessionId);
   // Pi titles a session by its latest session_info on any branch; an empty name clears it.
-  const title =
+  const piSessionInfo =
     input.source === "pi"
-      ? records.findLast((record) => record.type === "session_info")?.name?.trim() || null
-      : (claudeFields.title ?? null);
+      ? records.findLast((record) => record.type === "session_info")
+      : undefined;
+  const piSessionName = piSessionInfo?.name?.trim() || null;
+  const title = input.source === "pi" ? piSessionName : (claudeFields.title ?? null);
   let model = claudeFields.model ?? null;
   let derivedTitle: string | undefined;
   // Names a session whose only request was a bare command, such as `/review`.
@@ -620,7 +647,7 @@ function parseAgentSessionRecords(
     hasAssistantMessage ||= message.role === "assistant";
     conversationMessageCount += 1;
     messages.push(message);
-    if (messages.length > MAX_IMPORTED_MESSAGES) messages.shift();
+    if (messages.length > messageLimit) messages.shift();
   };
 
   const hasMatchingCodexEventInTurn = (text: string) => {
@@ -640,9 +667,11 @@ function parseAgentSessionRecords(
   };
 
   let recordIndex = -1;
+  let savedPiMode: "build" | "plan" | undefined;
   for (const record of input.source === "pi" ? activePiBranch(records) : records) {
     recordIndex += 1;
     if (input.source === "pi") {
+      savedPiMode = piModeFromRecord(record) ?? savedPiMode;
       if (!isPiConversationRecord(record)) continue;
       const text = extractText(record.message.content);
       if (text.length === 0) continue;
@@ -755,7 +784,7 @@ function parseAgentSessionRecords(
   const { codexResponseUser: _codexResponseUser, ...visibleFirstUserMessage } = firstUserMessage;
   const retainedMessages = firstUserMessageRetained
     ? visibleMessages
-    : [visibleFirstUserMessage, ...visibleMessages.slice(-(MAX_IMPORTED_MESSAGES - 1))];
+    : [visibleFirstUserMessage, ...visibleMessages.slice(-(messageLimit - 1))];
 
   return {
     source: input.source,
@@ -763,6 +792,8 @@ function parseAgentSessionRecords(
     providerSessionId,
     title:
       claudeFields.customTitle ?? title ?? derivedTitle ?? bareCommandTitle ?? "Imported thread",
+    ...(piSessionInfo === undefined ? {} : { piSessionName }),
+    ...(savedPiMode === undefined ? {} : { savedPiMode }),
     model,
     createdAt: retainedMessages[0]?.createdAt ?? fallbackTimestamp,
     updatedAt: fallbackTimestamp,
@@ -1816,7 +1847,9 @@ export const make = Effect.gen(function* () {
     }));
   });
 
-  const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* () {
+  const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* (
+    refreshNativePi = false,
+  ) {
     const settings = yield* serverSettings.getSettings.pipe(
       Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-settings", cause })),
     );
@@ -1842,6 +1875,7 @@ export const make = Effect.gen(function* () {
     let metadataTruncated = false;
 
     for (const source of ["claudeAgent", "codex", "pi"] as const) {
+      if (refreshNativePi && source !== "pi") continue;
       const instances: Array<{
         readonly instanceId: ProviderInstanceId;
         readonly config: ProviderInstanceConfig;
@@ -1885,7 +1919,9 @@ export const make = Effect.gen(function* () {
             hostEnvironment,
           ).pipe(Effect.provideService(HostProcess.HomeDirectory, homeDir));
           homePath = resolvePiSessionsDir(
-            environment,
+            refreshNativePi
+              ? { ...environment, PI_CODING_AGENT_SESSION_DIR: undefined }
+              : environment,
             piHome(environment, homeDir, platform),
             path,
           );
@@ -2094,19 +2130,29 @@ export const make = Effect.gen(function* () {
   const prepareRecentThreads = Effect.fn("AgentSessionScanner.prepareRecentThreads")(function* (
     workspaceRoot: string,
     completedSources: ReadonlyArray<AgentSessionImportSource>,
+    refreshNativePi: boolean,
   ) {
     const root = path.resolve(expandHomePath(workspaceRoot, homeDir));
     const realRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
-    if (isExcludedProjectPath(root) || isExcludedProjectPath(realRoot)) return Stream.empty;
+    // Onboarding excludes Home from project suggestions. An explicitly opened Home
+    // project should still see the native Pi sessions started there.
+    const home = normalizeProjectPathForComparison(path.resolve(homeDir));
+    const isNativePiHome =
+      refreshNativePi &&
+      normalizeProjectPathForComparison(root) === home &&
+      normalizeProjectPathForComparison(realRoot) === home;
+    if (!isNativePiHome && (isExcludedProjectPath(root) || isExcludedProjectPath(realRoot))) {
+      return Stream.empty;
+    }
     const rootIdentity = yield* directoryIdentity(root);
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     const cutoffMs = nowMs - RECENT_THREAD_WINDOW_MS;
 
     // Imports recorded since a budget-truncated collection can free budget for transcripts it cut off.
-    if (cachedCandidates === null || cachedCandidates.metadataTruncated) {
+    if (!refreshNativePi && (cachedCandidates === null || cachedCandidates.metadataTruncated)) {
       cachedCandidates = yield* collectCandidates();
     }
-    const { candidates } = cachedCandidates;
+    const { candidates } = refreshNativePi ? yield* collectCandidates(true) : cachedCandidates!;
 
     // The scan counts a linked worktree's sessions toward its main checkout, so import them with it.
     const candidateDirectories = candidates.flatMap((candidate) => {
@@ -2160,7 +2206,7 @@ export const make = Effect.gen(function* () {
       for (const transcript of candidate.transcripts) {
         if (
           transcript.mtimeMs === null ||
-          transcript.mtimeMs < cutoffMs ||
+          (!refreshNativePi && transcript.mtimeMs < cutoffMs) ||
           transcript.mtimeMs > nowMs
         ) {
           continue;
@@ -2316,6 +2362,11 @@ export const make = Effect.gen(function* () {
               : [...inheritedRecords, ...snapshot.records],
             snapshot.claudeFields,
             snapshot.droppedMessageCount,
+            // Initial imports remain bounded. Refresh needs the active branch before
+            // the visible window so it can validate the existing cache and recover missed turns.
+            refreshNativePi && candidate.source === "pi" && completed !== undefined
+              ? MAX_IMPORT_RECORDS
+              : MAX_IMPORTED_MESSAGES,
           );
           if (parsedThread === "empty") {
             // null means an unreadable history base, which may hold the conversation.
@@ -2366,9 +2417,80 @@ export const make = Effect.gen(function* () {
   const recentThreads: AgentSessionScanner["Service"]["recentThreads"] = (
     workspaceRoot,
     completedSources = [],
-  ) => Stream.unwrap(prepareRecentThreads(workspaceRoot, completedSources));
+    refreshNativePi = false,
+  ) => Stream.unwrap(prepareRecentThreads(workspaceRoot, completedSources, refreshNativePi));
 
-  return AgentSessionScanner.of({ scan, recentThreads });
+  const piModeCache = new Map<
+    string,
+    { identity: TranscriptIdentity; mode: "build" | "plan" | null }
+  >();
+  const decodeLiveJobs = Schema.decodeUnknownOption(
+    Schema.fromJsonString(
+      Schema.Struct({
+        pid: Schema.Int.check(Schema.isGreaterThan(0)),
+        at: Schema.Number,
+        shells: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+        subagents: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      }),
+    ),
+  );
+  const piSessionStatus = Effect.fn("AgentSessionScanner.piSessionStatus")(function* (
+    file: string | undefined,
+    fallbackMode: "build" | "plan" | null,
+  ) {
+    const idle = { mode: fallbackMode, shells: 0, subagents: 0 };
+    if (file === undefined || !path.isAbsolute(file) || !file.endsWith(".jsonl")) return idle;
+    const canonical = yield* fileSystem.realPath(file).pipe(Effect.orElseSucceed(() => file));
+    const stats = yield* statOption(canonical);
+    if (Option.isNone(stats) || stats.value.type !== "File") return idle;
+    const identity = transcriptIdentity(canonical, stats.value);
+    let cached = piModeCache.get(canonical);
+    if (!cached || !sameTranscriptIdentity(cached.identity, identity)) {
+      yield* importReadLock.withPermits(1)(
+        Effect.gen(function* () {
+          cached = piModeCache.get(canonical);
+          if (cached && sameTranscriptIdentity(cached.identity, identity)) return;
+          const snapshot = yield* readTranscript(canonical, identity, "pi");
+          if (snapshot === null) return;
+          const mode =
+            activePiBranch(snapshot.records)
+              .slice()
+              .reverse()
+              .map(piModeFromRecord)
+              .find((value) => value !== undefined) ?? null;
+          cached = { identity, mode };
+          if (piModeCache.size >= 128) {
+            const oldest = piModeCache.keys().next().value;
+            if (oldest !== undefined) piModeCache.delete(oldest);
+          }
+          piModeCache.set(canonical, cached);
+        }),
+      );
+    }
+    const mode = cached?.mode ?? fallbackMode;
+    const hash = yield* Effect.tryPromise({
+      try: () => globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)),
+      catch: () => "status-key-unavailable" as const,
+    }).pipe(Effect.option);
+    if (Option.isNone(hash)) return { ...idle, mode };
+    const key = Buffer.from(hash.value).toString("hex");
+    const statusFile = path.join(homeDir, ".pi", "tmp", "pi-code-status", key + ".json");
+    const liveStats = yield* statOption(statusFile);
+    if (Option.isNone(liveStats) || liveStats.value.type !== "File" || liveStats.value.size > 1024n)
+      return { ...idle, mode };
+    const text = yield* fileSystem.readFileString(statusFile).pipe(Effect.orElseSucceed(() => ""));
+    const live = Option.getOrUndefined(decodeLiveJobs(text));
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    if (!live || live.at > now || now - live.at > 6_000) return { ...idle, mode };
+    const alive = yield* Effect.try({
+      try: () => process.kill(live.pid, 0),
+      catch: () => "status-owner-unavailable" as const,
+    }).pipe(Effect.orElseSucceed(() => false));
+    if (!alive) return { ...idle, mode };
+    return { mode, shells: live.shells, subagents: live.subagents };
+  });
+
+  return AgentSessionScanner.of({ scan, recentThreads, piSessionStatus });
 });
 
 export const layer = Layer.effect(AgentSessionScanner, make).pipe(

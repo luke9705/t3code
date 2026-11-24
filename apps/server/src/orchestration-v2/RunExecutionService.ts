@@ -460,6 +460,7 @@ export function routeProviderEvent(
         },
       ];
     }
+    case "thread_title.updated":
     case "thread_model_selection.updated":
       return [event.threadId === input.threadId, state];
     case "provider_thread.updated": {

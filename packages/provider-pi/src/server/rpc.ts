@@ -90,6 +90,7 @@ export interface PiRpcSpawnOptions {
   readonly args: ReadonlyArray<string>;
   readonly cwd: string | undefined;
   readonly env: NodeJS.ProcessEnv;
+  readonly observeEvent?: (event: PiRpcRecord) => void;
 }
 
 export interface PiRpcConnection {
@@ -325,6 +326,7 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
           return;
         }
       }
+      options.observeEvent?.(record);
       yield* Queue.offer(events, record);
     });
 

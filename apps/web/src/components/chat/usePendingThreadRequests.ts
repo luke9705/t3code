@@ -390,7 +390,7 @@ export function usePendingThreadRequests(input: {
 
   const onRespondToUserInput = async (
     requestId: RuntimeRequestId,
-    answers: Record<string, unknown>,
+    answers: Record<string, unknown> | null,
   ) => {
     if (!activeThreadId || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope))
       return;
@@ -405,6 +405,21 @@ export function usePendingThreadRequests(input: {
       existing.includes(requestId) ? existing : [...existing, requestId],
     );
     const prepareAndRespond = async () => {
+      // Native single-choice dialogs can be cancelled. Message-backed questions use dismiss instead.
+      if (answers === null) {
+        const result = await respondToThreadApproval({
+          environmentId,
+          input: { threadId: activeThreadId, requestId, decision: "cancel" },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          setThreadError(
+            activeThreadId,
+            thrownErrorMessage(squashAtomCommandFailure(result), m) ??
+              m(msg("Failed to dismiss the question.")),
+          );
+        }
+        return result;
+      }
       const attachmentsByQuestionId = new Map<string, UserInputAttachments[string]>();
       const providerAnswers = { ...answers };
       const threadDraft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
@@ -495,6 +510,8 @@ export function usePendingThreadRequests(input: {
       setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
     });
   };
+
+  const onRespondToUserInputStable = useStableCallback(onRespondToUserInput);
 
   const onDismissUserInput = async (requestId: RuntimeRequestId) => {
     if (!activeThreadId) return;
@@ -670,6 +687,7 @@ export function usePendingThreadRequests(input: {
     respondingRequestIds,
     onRespondToApproval: onRespondToApprovalStable,
     onDismissUserInput: onDismissUserInputStable,
+    onRespondToUserInput: onRespondToUserInputStable,
     onSelectActivePendingUserInputOption: onSelectActivePendingUserInputOptionStable,
     onChangeActivePendingUserInputCustomAnswer,
     onAdvanceActivePendingUserInput,

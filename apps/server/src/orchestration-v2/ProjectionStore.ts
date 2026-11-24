@@ -2057,8 +2057,28 @@ function activeProviderGoalForShell(
 
 function isSilentRunForShell(
   run: OrchestrationV2ThreadProjection["runs"][number],
-  projection: Pick<OrchestrationV2ThreadProjection, "messages" | "turnItems">,
+  projection: Pick<OrchestrationV2ThreadProjection, "messages" | "turnItems" | "providerThreads">,
 ): boolean {
+  if (
+    projection.providerThreads.some(
+      (thread) => thread.id === run.providerThreadId && thread.driver === "pi",
+    ) &&
+    projection.messages.some(
+      (message) =>
+        message.id === run.userMessageId &&
+        message.role === "user" &&
+        message.attachments.length === 0 &&
+        /^\/plan\s+(?:on|off)$/.test(message.text.trim()),
+    )
+  ) {
+    return !projection.turnItems.some(
+      (item) =>
+        item.runId === run.id &&
+        (item.type === "assistant_message" ||
+          item.type === "reasoning" ||
+          item.type === "compaction"),
+    );
+  }
   return (
     run.status !== "failed" &&
     projection.messages.some(
@@ -8333,7 +8353,28 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     // Mirrors isSilentRunForShell.
     const isSilentShellRun = (alias: string) => {
       const run = sql.literal(alias);
-      return sql`(
+      const whitespace = sql.literal(
+        "char(9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279)",
+      );
+      const text = sql`trim(json_extract(prompt.payload_json, '$.text'), ${whitespace})`;
+      return sql`((
+        EXISTS (
+          SELECT 1 FROM orchestration_v2_projection_provider_threads provider_thread
+          JOIN orchestration_v2_projection_messages prompt
+            ON prompt.message_id = json_extract(${run}.payload_json, '$.userMessageId')
+          WHERE provider_thread.provider_thread_id = json_extract(${run}.payload_json, '$.providerThreadId')
+            AND provider_thread.driver = 'pi'
+            AND prompt.role = 'user'
+            AND coalesce(json_array_length(prompt.payload_json, '$.attachments'), 0) = 0
+            AND substr(${text}, 1, 5) = '/plan'
+            AND instr(${whitespace}, substr(${text}, 6, 1)) > 0
+            AND trim(substr(${text}, 6), ${whitespace}) IN ('on', 'off')
+        ) AND NOT EXISTS (
+          SELECT 1 FROM orchestration_v2_projection_turn_items work
+          WHERE work.thread_id = ${run}.thread_id AND work.run_id = ${run}.run_id
+            AND work.type IN ('assistant_message', 'reasoning', 'compaction')
+        )
+      ) OR (
         ${run}.status <> 'failed'
         AND EXISTS (
           SELECT 1 FROM orchestration_v2_projection_messages prompt
@@ -8345,7 +8386,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             AND compaction.type = 'compaction'
             AND compaction.status = 'failed'
         )
-      )`;
+      ))`;
     };
     // The newest run not held or outlived before it started, matching latestUnheldRun.
     const presentedShellRunId = (threadId: Statement.Fragment) => sql`(

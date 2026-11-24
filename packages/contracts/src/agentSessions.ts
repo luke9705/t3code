@@ -1,5 +1,11 @@
 import * as Schema from "effect/Schema";
-import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const AgentSessionSource = Schema.Literals(["claudeAgent", "codex", "pi"]);
@@ -19,6 +25,14 @@ export const AgentSessionImportSource = Schema.Struct({
   birthtimeMs: Schema.NullOr(Schema.Number),
 });
 export type AgentSessionImportSource = typeof AgentSessionImportSource.Type;
+
+export const PiSessionStatusInput = Schema.Struct({ threadId: ThreadId });
+export const PiSessionStatus = Schema.Struct({
+  mode: Schema.NullOr(Schema.Literals(["build", "plan"])),
+  shells: NonNegativeInt,
+  subagents: NonNegativeInt,
+});
+export type PiSessionStatus = typeof PiSessionStatus.Type;
 
 export const AgentSessionScanInput = Schema.Struct({});
 export type AgentSessionScanInput = typeof AgentSessionScanInput.Type;
@@ -51,6 +65,7 @@ export type AgentSessionScanResult = typeof AgentSessionScanResult.Type;
 export const AgentSessionImportInput = Schema.Struct({
   projectId: ProjectId,
   expectedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  refreshNativePi: Schema.optional(Schema.Boolean),
 });
 export type AgentSessionImportInput = typeof AgentSessionImportInput.Type;
 

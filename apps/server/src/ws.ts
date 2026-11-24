@@ -3142,6 +3142,23 @@ export const layerWsRpc = (
         [WS_METHODS.attachmentsCreateUploadUrl]: (input) => issueAttachmentUploadUrl(input),
         [WS_METHODS.attachmentsDelete]: (input) => deletePendingAttachment(input.attachmentId),
         [WS_METHODS.agentSessionsScan]: () => agentSessionScanner.scan,
+        [WS_METHODS.piSessionStatus]: ({ threadId }) =>
+          orchestrationEngine.getThreadRecords(threadId, ["providerThreads"]).pipe(
+            Effect.flatMap(({ thread, providerThreads }) => {
+              const native = providerThreads.find(({ id }) => id === thread.activeProviderThreadId);
+              const sessionFile =
+                thread.deletedAt === null &&
+                native?.driver === "pi" &&
+                native.providerInstanceId === thread.modelSelection.instanceId
+                  ? native.nativeThreadRef?.nativeId
+                  : undefined;
+              return agentSessionScanner.piSessionStatus(
+                sessionFile ?? undefined,
+                thread.savedPiMode ?? null,
+              );
+            }),
+            Effect.orElseSucceed(() => ({ mode: null, shells: 0, subagents: 0 })),
+          ),
         [WS_METHODS.agentSessionsImport]: (input) =>
           agentSessionImporter.importRecentAgentThreads(input),
         [WS_METHODS.assetsCreateUrl]:

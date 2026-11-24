@@ -182,6 +182,9 @@ export function upsertProviderWorkspaceSnapshot(
       : scopedSnapshot.slashCommands,
     ...(scopedSnapshot.slashCommandsPending ? { slashCommandsPending: true } : {}),
     skills: scopedSnapshot.skills,
+    ...(scopedSnapshot.initialPiMode === undefined
+      ? {}
+      : { initialPiMode: scopedSnapshot.initialPiMode }),
     ...(optionDescriptors === undefined ? {} : { optionDescriptors }),
     ...(models === undefined ? {} : { models }),
     ...(scopedSnapshot.workspaceModelsPending ? { modelsPending: true } : {}),

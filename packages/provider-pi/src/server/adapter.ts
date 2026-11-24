@@ -79,7 +79,11 @@ import {
   materializePiT3McpExtension,
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
-import { PI_FILE_CHANGE_TOOLS, PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
+import {
+  PI_CODE_T3_BRIDGE,
+  PI_FILE_CHANGE_TOOLS,
+  PI_T3_SERVICE_TIER_COMMAND,
+} from "./mcpExtensionSource.ts";
 import { PI_STANDARD_SERVICE_TIER } from "./modelCapabilities.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
@@ -95,6 +99,16 @@ const PI_SUBAGENT_ASYNC_PREFIX = "PI_SUBAGENT_ASYNC_JSON:";
 const decodePiJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const PI_SESSION_TIMEOUT_MS = 60_000;
 const MAX_EXTENSION_STATUSES = 32;
+const PI_PLAN_STATUS = "plan-mode";
+const PI_EXIT_PLAN_TITLE = "Exit Plan mode";
+const PI_EXIT_PLAN_OPTIONS = [
+  "Compact and implement",
+  "No compression and implement",
+  "Just exit Plan mode",
+] as const;
+// The composer card shows the header as its title, so the body explains the choice instead of repeating it.
+const PI_EXIT_PLAN_QUESTION = "Your plan stays saved. Choose how to continue in Build mode.";
+const isPiModeCommand = (text: string) => /^\/plan\s+(?:on|off)$/.test(text.trim());
 const MAX_EXTENSION_STATUS_KEY_LENGTH = 256;
 const MAX_EXTENSION_STATUS_TEXT_LENGTH = 4096;
 const PI_UNSOLICITED_ACTIVITY_ERROR =
@@ -497,7 +511,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
     ) {
       const scope = yield* Effect.scope;
       const cwd = input.runtimePolicy.cwd ?? host.paths.cwd;
-      const mcpSession = yield* mcpSessions.read(input.threadId);
+      const mcpSession = PI_CODE_T3_BRIDGE.mcpTools
+        ? yield* mcpSessions.read(input.threadId)
+        : undefined;
       const provideCacheFs = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) =>
         effect.pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -510,7 +526,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               }),
           ),
         );
-      // Always inject the permission hook even without MCP credentials; otherwise Supervised becomes unrestricted.
+      // Footer metrics and other browser adapters still use this extension without T3 MCP.
       const extensionPath = yield* provideCacheFs(
         materializePiT3McpExtension(host.paths.providerStatusCacheDir),
       );
@@ -549,7 +565,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             mcpSession,
             extensionPath,
             sessionPath,
-            runtimeMode: input.runtimePolicy.runtimeMode,
+            ...(PI_CODE_T3_BRIDGE.toolApprovals
+              ? { runtimeMode: input.runtimePolicy.runtimeMode }
+              : {}),
           });
           const scopedLaunch = yield* agentScope.wrap({
             command: options.settings.binaryPath || "pi",
@@ -691,10 +709,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       );
       let appliedModel: string | null = null;
       let appliedThinking: string | null = null;
+      // A mode transition can set Pi's thinking level independently of the app picker.
+      let planThinkingSelection: ModelSelection | null = null;
       // Pi reloads extensions (resetting the tier) on paths the adapter cannot see, so a chosen tier
       // is resent every turn; Standard sends a clear only when an earlier tier may still be set.
       let serviceTierMayBeSet = false;
-      let appliedSessionName: string | null = null;
       const outOfTurnExtensionErrors: Array<PiRpcRecord> = [];
       let lastKnownLeaf: string | null = null;
       // Failed get_entries leaves an untrustworthy turn boundary; re-sync the cursor on next capture.
@@ -1926,7 +1945,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           updatedAt: createdAt,
         };
         const askUser =
-          method === "select" && turn !== null
+          method === "select" && turn !== null && title !== PI_EXIT_PLAN_TITLE
             ? piAskUserSingleSelectQuestion(nativeRequestId, title, event, turn.toolArgs)
             : undefined;
         const turnItem: OrchestrationV2TurnItem =
@@ -2242,7 +2261,27 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         yield* connection.terminate;
       });
 
+      const publishSessionName = (thread: OrchestrationV2ProviderThread, name: string | null) =>
+        thread.appThreadId === null
+          ? Effect.void
+          : emit({
+              type: "thread_title.updated",
+              driver: PI_PROVIDER,
+              threadId: thread.appThreadId,
+              providerThreadId: thread.id,
+              title: name,
+            });
+
       const handleSessionEvent = Effect.fnUntraced(function* (event: PiRpcRecord) {
+        if (event["type"] === "session_info_changed") {
+          if (threadState !== null) {
+            yield* publishSessionName(
+              threadState.providerThread,
+              recordString(event, "name") ?? null,
+            );
+          }
+          return;
+        }
         if (event["type"] === "t3.extension_status_reset") {
           const reset = extensionStatusReset;
           if (reset !== null && event["reset"] === reset) {
@@ -2652,6 +2691,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             }
             const responseTurn =
               pendingPrompt?.providerTurnId === turn?.providerTurn.id ? turn : null;
+            if (
+              responseTurn !== null &&
+              pendingPrompt?.kind === "turn_start" &&
+              isPiModeCommand(responseTurn.turnInput.message.text)
+            ) {
+              // The Plan command's ACK follows its dialog and optional compaction. Only
+              // then can a probe distinguish a mode-only change from native implementation.
+              responseTurn.settleWhenIdle = true;
+            }
             if (
               event["success"] === false &&
               nativeCompacting &&
@@ -3106,7 +3154,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             threadState = null;
             appliedModel = null;
             appliedThinking = null;
-            appliedSessionName = null;
             baselineModel = null;
             baselineThinking = null;
             contextWindow = null;
@@ -3209,6 +3256,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               driver: PI_PROVIDER,
               providerThread,
             });
+          const sessionName = recordString(stateData, "sessionName");
+          if (sessionName) yield* publishSessionName(providerThread, sessionName);
           return providerThread;
         },
         (effect) =>
@@ -3229,6 +3278,18 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
 
       const applySelection = Effect.fnUntraced(function* (modelSelection: ModelSelection) {
         const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
+        const planning = sessionEntity.extensionStatuses?.some(
+          ({ key, text }) => key === PI_PLAN_STATUS && text === "plan mode",
+        );
+        const keepPiThinking =
+          planning ||
+          (planThinkingSelection !== null &&
+            modelSelection.model === planThinkingSelection.model &&
+            thinking === getModelSelectionStringOptionValue(planThinkingSelection, "thinking"));
+        if (!keepPiThinking) planThinkingSelection = null;
+        const nativeThinking = keepPiThinking
+          ? recordString(yield* request({ type: "get_state" }), "thinkingLevel")
+          : undefined;
         // pi.setModel and /preset can change the model without an RPC event.
         // Confirm cached selections against Pi before skipping them.
         const modelCached =
@@ -3256,6 +3317,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             });
           }
           if (
+            !keepPiThinking &&
             thinking === undefined &&
             baselineThinking !== null &&
             appliedThinking !== baselineThinking
@@ -3291,7 +3353,12 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             providerSession: sessionEntity,
           });
         }
+        if (nativeThinking !== undefined && appliedThinking === null) {
+          yield* request({ type: "set_thinking_level", level: nativeThinking });
+          appliedThinking = nativeThinking;
+        }
         if (
+          !keepPiThinking &&
           thinking !== undefined &&
           thinking !== appliedThinking &&
           PI_THINKING_LEVELS.has(thinking)
@@ -3398,6 +3465,21 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 }),
             ),
           ),
+        applyThreadTitle: Effect.fn("PiAdapter.applyThreadTitle")(function* ({
+          providerThread,
+          title,
+        }) {
+          const state = threadState;
+          if (
+            state?.providerThread.id !== providerThread.id ||
+            registrationInProgress ||
+            !isLiveSessionOf(state, providerThread.nativeThreadRef?.nativeId)
+          )
+            return;
+          yield* request({ type: "set_session_name", name: title }).pipe(
+            Effect.catch((cause) => protocolError("Pi could not rename the session", cause)),
+          );
+        }),
         compactThread: (turnInput) =>
           runtime.startTurn({
             ...turnInput,
@@ -3433,20 +3515,30 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const continuation =
               turnInput.message.createdBy === "agent" &&
               turnInput.message.creationSource === "provider";
-            if (!continuation) yield* applySelection(turnInput.modelSelection);
-            if (turnInput.appThread.title !== appliedSessionName) {
-              yield* request({
-                type: "set_session_name",
-                name: turnInput.appThread.title,
-              }).pipe(
-                Effect.tap(() =>
-                  Effect.sync(() => (appliedSessionName = turnInput.appThread.title)),
-                ),
-                Effect.ignore,
-              );
+            const modeCommand = !continuation && isPiModeCommand(turnInput.message.text);
+            const nativeModeKnown = sessionEntity.extensionStatuses?.some(
+              ({ key, text }) =>
+                key === PI_PLAN_STATUS && (text === "plan mode" || text === "build mode"),
+            );
+            if (modeCommand && !nativeModeKnown) {
+              const catalog = yield* request({ type: "get_commands" });
+              const commands = recordField(catalog, "commands");
+              if (
+                !Array.isArray(commands) ||
+                !commands.some(
+                  (command) =>
+                    recordString(command, "name") === "plan" &&
+                    recordString(command, "source") === "extension",
+                )
+              ) {
+                return yield* protocolError("The current Pi session has no native Plan extension.");
+              }
             }
+            if (!continuation && (!modeCommand || state.providerThread.lastRunOrdinal === null)) {
+              yield* applySelection(turnInput.modelSelection);
+            }
+            if (modeCommand) planThinkingSelection = turnInput.modelSelection;
             // Resolve attachments before turn installation so failures cannot strand activeTurn.
-            // Inject instructions through before_agent_start; wrapping user text breaks slash-command expansion.
             const compactCommand = continuation
               ? null
               : parsePiCompactCommand(turnInput.message.text);
@@ -3989,7 +4081,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                       lastNativeThreadId = forkSessionFile;
                       appliedModel = null;
                       appliedThinking = null;
-                      appliedSessionName = null;
                       lastKnownLeaf = leafId;
                       leafCursorStale = entriesData === undefined;
                       yield* updateProviderThread(state, {
@@ -4396,6 +4487,20 @@ function piQuestion(
               value: "",
             },
           ];
+  if (
+    method === "select" &&
+    title === PI_EXIT_PLAN_TITLE &&
+    options.length === PI_EXIT_PLAN_OPTIONS.length &&
+    options.every((option, index) => option.value === PI_EXIT_PLAN_OPTIONS[index])
+  ) {
+    return {
+      id: questionId,
+      header: title,
+      question: PI_EXIT_PLAN_QUESTION,
+      options,
+      allowCustomAnswer: false,
+    };
+  }
   // Pi's select and editor dialogs carry only a title, so show it once, as the question.
   // Extensions may send a blank placeholder, which is not a valid question.
   const detail = [recordString(event, "message"), recordString(event, "placeholder")].find(
@@ -4418,6 +4523,13 @@ const rpivField = (input: unknown, key: string) =>
 const rpivOptionLine = (option: unknown, index: number) =>
   // oxlint-disable-next-line t3code/no-em-dash-copy -- Matches the extension's option line format.
   `${index + 1}. ${rpivField(option, "label")} — ${rpivField(option, "description")}`;
+
+/** The local question tool numbers its labels and adds the description only when it has one. */
+const questionToolOptionLine = (option: unknown, index: number) => {
+  const description = rpivField(option, "description");
+  // oxlint-disable-next-line t3code/no-em-dash-copy -- Matches the extension's option line format.
+  return `${index + 1}. ${rpivField(option, "label")}${description ? ` — ${description}` : ""}`;
+};
 
 /** The extension folds option previews into the select title, the only place clients show them. */
 const rpivPreviewBlock = (options: ReadonlyArray<unknown>) => {
@@ -4500,6 +4612,37 @@ function piAskUserSingleSelectQuestion(
       };
     }
   }
+  // The local question tool asks one question the same way: a select of "N. label" lines, with an
+  // optional " — description", plus the trailing "Type something." entry, titled with the question itself.
+  for (const args of toolArgs.values()) {
+    const text = rpivField(args, "question");
+    const encodedOptions = rpivDecoded(recordField(args, "options"), Array.isArray);
+    if (!text?.trim() || title !== text || !Array.isArray(encodedOptions)) continue;
+    if (encodedOptions.length !== lines.length - 1) continue;
+    const options = encodedOptions.map((option) => rpivDecoded(option, Predicate.isObject));
+    if (!options.every((option, index) => lines[index] === questionToolOptionLine(option, index)))
+      continue;
+    return {
+      question: {
+        id: questionId,
+        header: "Question",
+        question: text,
+        options: options.map((option, index) => {
+          const label = rpivField(option, "label")?.trim() || `Option ${index + 1}`;
+          return {
+            label,
+            description: rpivField(option, "description")?.trim() || label,
+            value: questionToolOptionLine(option, index),
+          };
+        }),
+      },
+      customAnswerRoute: {
+        lines,
+        sentinel,
+        followUpTitlePrefix: `${text}\n\n${lines.slice(0, -1).join("\n")}\n\n`,
+      },
+    };
+  }
   return undefined;
 }
 
@@ -4515,7 +4658,17 @@ function piUiResponse(
   }
   const answer = answers?.[pending.questionId];
   // RPC distinguishes empty dialog values from cancellation (undefined).
-  if (typeof answer === "string") return { value: answer };
+  if (typeof answer === "string") {
+    const question =
+      pending.turnItem.type === "user_input_request" ? pending.turnItem.questions[0] : undefined;
+    if (
+      question?.header === PI_EXIT_PLAN_TITLE &&
+      question.allowCustomAnswer === false &&
+      !question.options.some(({ value }) => value === answer)
+    )
+      return { cancelled: true };
+    return { value: answer };
+  }
   return { cancelled: true };
 }
 

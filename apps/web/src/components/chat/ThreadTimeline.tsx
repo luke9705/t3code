@@ -4,6 +4,7 @@ import { useIncrementalTimelineEntries } from "../../hooks/useIncrementalTimelin
 import type { TimelineEntriesInput, TimelineEntry } from "../../session-logic";
 import { useTimelineVisibleTurnItems } from "../../state/entities";
 import {
+  isPiModeCommand,
   peekRememberedThreadTimeline,
   rememberReadyThreadTimeline,
   resolveThreadSwitchTimeline,
@@ -24,6 +25,7 @@ export function ThreadTimeline({
   activeThreadKey,
   syncing,
   detailLoading,
+  hidePiModeCommands,
   ...timelineProps
 }: Omit<ComponentProps<typeof MessagesTimeline>, "timelineEntries"> & {
   /** Null until the thread's detail may load; see resolveThreadDetailRef. */
@@ -34,13 +36,25 @@ export function ThreadTimeline({
   activeThreadKey: string | null;
   syncing: boolean;
   detailLoading: boolean;
+  hidePiModeCommands: boolean;
 }) {
   const visibleTurnItems = useTimelineVisibleTurnItems(threadDetailRef);
   const serverEntries = useIncrementalTimelineEntries(activeThreadKey, {
     ...entriesInput,
     visibleTurnItems,
   });
-  const entries = draftEntries ?? serverEntries;
+  const allEntries = draftEntries ?? serverEntries;
+  const entries = hidePiModeCommands
+    ? allEntries.filter(
+        (entry) =>
+          !(
+            entry.kind === "message" &&
+            entry.message.role === "user" &&
+            !entry.message.attachments?.length &&
+            isPiModeCommand(entry.message.text)
+          ),
+      )
+    : allEntries;
   const displayedEntries = resolveThreadSwitchTimeline({
     loading: entries.length === 0 && syncing,
     activeThreadKey,

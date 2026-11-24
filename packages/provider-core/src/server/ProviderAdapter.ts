@@ -120,6 +120,13 @@ export const ProviderAdapterV2Event = Schema.Union([
     sessionScoped: Schema.optional(Schema.Boolean),
     retainedNativeTurnIds: Schema.optional(Schema.Array(Schema.String)),
   }),
+  Schema.Struct({
+    type: Schema.Literal("thread_title.updated"),
+    driver: ProviderDriverKind,
+    threadId: ThreadId,
+    providerThreadId: ProviderThreadId,
+    title: Schema.NullOr(Schema.String),
+  }),
   /** The agent changed selected options itself, such as leaving plan mode once its plan ran. */
   Schema.Struct({
     type: Schema.Literal("thread_model_selection.updated"),
