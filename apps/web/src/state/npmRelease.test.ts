@@ -51,12 +51,6 @@ const configFor = (environmentId: EnvironmentId | null, supported = true) =>
     issues: [],
     providers: [],
     availableEditors: [],
-    observability: {
-      logsDirectoryPath: "/test/logs",
-      localTracingEnabled: false,
-      otlpTracesEnabled: false,
-      otlpMetricsEnabled: false,
-    },
     settings: {},
   });
 

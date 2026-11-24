@@ -1,5 +1,5 @@
 import type {
-  ResourceTelemetryProcessCategory,
+  ResourceMonitorProcessCategory,
   ServerProcessResourceHistoryInput,
   ServerProcessResourceHistoryResult,
 } from "@t3tools/contracts";
@@ -8,7 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
-import * as ResourceTelemetry from "../resourceTelemetry/ResourceTelemetry.ts";
+import * as ResourceMonitor from "../resourceMonitor/ResourceMonitor.ts";
 
 export class ProcessResourceMonitor extends Context.Service<
   ProcessResourceMonitor,
@@ -19,7 +19,7 @@ export class ProcessResourceMonitor extends Context.Service<
   }
 >()("t3/diagnostics/ProcessResourceMonitor") {}
 
-function isLegacyBackendCategory(category: ResourceTelemetryProcessCategory): boolean {
+function isLegacyBackendCategory(category: ResourceMonitorProcessCategory): boolean {
   return (
     category === "server" ||
     category === "server-child" ||
@@ -30,9 +30,9 @@ function isLegacyBackendCategory(category: ResourceTelemetryProcessCategory): bo
 
 /** @public */
 export const make = Effect.fn("makeProcessResourceMonitor")(function* () {
-  const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
+  const monitor = yield* ResourceMonitor.ResourceMonitor;
   const readHistory: ProcessResourceMonitor["Service"]["readHistory"] = (input) =>
-    telemetry.readHistory(input).pipe(
+    monitor.readHistory(input).pipe(
       Effect.map((history) => {
         const topProcesses = history.topProcesses
           .filter((entry) => isLegacyBackendCategory(entry.category))

@@ -5,7 +5,6 @@ import {
   ProviderInstanceId,
   type ProviderInstallState,
   type ProviderSetupInput,
-  ServerObservability,
   EnvironmentThemeId,
   UsageLimitSourceId,
   type ServerConfig,
@@ -82,7 +81,6 @@ const CONFIG = {
   issues: [],
   keybindings: {},
   keybindingsConfigPath: null,
-  observability: null,
   providers: [],
   settings: {},
   environment: { capabilities: { environmentThemes: true } },
@@ -523,57 +521,6 @@ describe("server state projection", () => {
         }),
       );
     }),
-  );
-
-  it.effect(
-    "compares nested durable values independently of key order and omitted undefined fields",
-    () =>
-      Effect.gen(function* () {
-        const saved = yield* Ref.make<ReadonlyArray<ServerConfig>>([]);
-        const observability = {
-          logsDirectoryPath: "/synthetic/logs",
-          localTracingEnabled: false,
-          otlpTracesEnabled: false,
-          otlpMetricsEnabled: false,
-          otlpLogsEnabled: false,
-        };
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const h = yield* makeConfigPersistenceHarness((_id, config) =>
-              Ref.update(saved, (values) => [...values, config]),
-            );
-            const first = yield* h.send(snapshotEvent({ ...CONFIG, observability }));
-            yield* TestClock.adjust("500 millis");
-            const reordered = Object.fromEntries(
-              Object.entries(observability).toReversed(),
-            ) as typeof observability;
-            for (const next of [
-              { ...CONFIG, observability: reordered },
-              { ...CONFIG, observability: { ...reordered, otlpTracesUrl: undefined } },
-              { ...CONFIG, observability: { ...observability } },
-            ]) {
-              const encode = Schema.encodeEffect(Schema.fromJsonString(ServerObservability));
-              expect(JSON.parse(yield* encode(next.observability))).toEqual(
-                JSON.parse(yield* encode(observability)),
-              );
-              const projection = yield* h.send(snapshotEvent(next));
-              expect(projection.config.observability).toEqual(next.observability);
-              yield* TestClock.adjust("10 seconds");
-              expect.soft(yield* Ref.get(saved)).toEqual([first.config]);
-            }
-            const writesBeforeChange = (yield* Ref.get(saved)).length;
-            const changed = yield* h.send(
-              snapshotEvent({
-                ...CONFIG,
-                observability: { ...observability, otlpTracesUrl: "https://traces.example.test" },
-              }),
-            );
-            yield* TestClock.adjust("10 seconds");
-            expect((yield* Ref.get(saved)).length).toBe(writesBeforeChange + 1);
-            expect((yield* Ref.get(saved)).at(-1)).toEqual(changed.config);
-          }),
-        );
-      }),
   );
 
   it.effect("saves once across transient themes, usage sources and stall updates", () =>
@@ -1885,9 +1832,9 @@ describe("provider setup commands", () => {
   );
 });
 
-describe("resource telemetry history", () => {
+describe("resource monitoring history", () => {
   it.effect.each([
-    ["resourceTelemetryHistory", WS_METHODS.serverGetResourceTelemetryHistory],
+    ["resourceMonitorHistory", WS_METHODS.serverGetResourceMonitorHistory],
     ["processResourceHistory", WS_METHODS.serverGetProcessResourceHistory],
   ] as const)(
     "%s refreshes an initially empty history while mounted and stops after unmount",

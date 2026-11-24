@@ -1,26 +1,14 @@
-import * as HostProcess from "@t3tools/shared/HostProcess";
-import * as SharedObservability from "@t3tools/shared/observability";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Redactable from "effect/Redactable";
 import * as References from "effect/References";
-import * as OtlpExporter from "effect/observability/OtlpExporter";
-import * as OtlpLogger from "effect/observability/OtlpLogger";
 
 import * as ServerConfig from "./config.ts";
-import * as OtlpExportFailures from "./observability/OtlpExportFailures.ts";
 
-// HTTP errors logged with --log-ws-events carry the request URL and its connection ticket.
-const redactingCredentials = <Output>(logger: Logger.Logger<unknown, Output>) =>
-  Logger.make<unknown, Output>((options) =>
-    logger.log({ ...options, cause: SharedObservability.redactCauseCredentials(options.cause) }),
-  );
-
-// consolePretty collapses Cause fields via util.inspect; render them with Cause.pretty like standalone arguments.
 const consolePretty = (): Logger.Logger<unknown, void> => {
-  const pretty = redactingCredentials(Logger.consolePretty());
+  const pretty = Logger.consolePretty();
   return Logger.make((options) =>
     pretty.log({
       ...options,
@@ -51,32 +39,10 @@ function prettyCauseFields(value: unknown): unknown {
 
 export const layer = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
-  const hostName = yield* HostProcess.Hostname;
   const layerMinimumLogLevel = Layer.succeed(References.MinimumLogLevel, config.logLevel);
 
-  const logs = config.otlpLogsExport;
-  const otlpLogger =
-    config.otlpLogsUrl === undefined
-      ? undefined
-      : OtlpLogger.make({
-          url: config.otlpLogsUrl,
-          exportInterval: `${logs.exportIntervalMs} millis`,
-          headers: logs.headers,
-          resource: ServerConfig.otlpResource(config, hostName),
-        }).pipe(Effect.map(redactingCredentials));
-
   // Logger.layer replaces the whole set; name every logger here.
-  // OTLP includes traced messages as log records, so also using tracerLogger would duplicate in-span exports.
-  const layerLogger = Logger.layer(
-    otlpLogger === undefined
-      ? [consolePretty(), Logger.tracerLogger]
-      : [consolePretty(), otlpLogger],
-    { mergeWithExisting: false },
-  ).pipe(
-    Layer.provide(OtlpExporter.layerFlusher),
-    Layer.provide(OtlpExportFailures.layer("logs")),
-    Layer.provide(SharedObservability.layerOtlpSerialization(logs.protocol)),
-  );
+  const layerLogger = Logger.layer([consolePretty()], { mergeWithExisting: false });
 
   return Layer.mergeAll(layerLogger, layerMinimumLogLevel);
 }).pipe(Layer.unwrap);

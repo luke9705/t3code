@@ -21,11 +21,8 @@ export const DesktopBackendBootstrap = Schema.Struct({
   shellEnvironmentPrepared: Schema.optionalKey(Schema.Boolean),
   tailscaleServeEnabled: Schema.Boolean,
   tailscaleServePort: PortSchema,
-  otlpTracesUrl: Schema.optional(Schema.String),
-  otlpMetricsUrl: Schema.optional(Schema.String),
-  otlpLogsUrl: Schema.optional(Schema.String),
-  desktopTelemetryFd: Schema.optionalKey(PositiveInt),
-  desktopTelemetryControlFd: Schema.optionalKey(PositiveInt),
+  desktopHostFd: Schema.optionalKey(PositiveInt),
+  desktopHostControlFd: Schema.optionalKey(PositiveInt),
   // Whether the spawning desktop app can install updates when the server requests one.
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
   desktopBrowserFd: Schema.optionalKey(PositiveInt),

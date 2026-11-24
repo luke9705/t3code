@@ -8,7 +8,6 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Metric from "effect/Metric";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -16,7 +15,6 @@ import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
-import * as Metrics from "./Metrics.ts";
 
 // Subtract the histogram's timer resolution; this can undercount stalls by up to RESOLUTION_MS.
 const RESOLUTION_MS = 1000;
@@ -114,21 +112,6 @@ export const stallMs = ({ delayMaxNs, activeMs }: EventLoopReadings) => {
   return delayMs;
 };
 
-// Untraced: it runs inside every 30-second tick, which already has the monitor's own span.
-const recordGauges = Effect.fnUntraced(function* (readings: EventLoopReadings) {
-  const cpuMs = (readings.usage.userCPUTime + readings.usage.systemCPUTime) / 1000;
-  yield* Metric.update(Metrics.serverResidentBytes, readings.rssBytes);
-  yield* Metric.update(Metrics.serverHeapUsedBytes, readings.heapUsedBytes);
-  yield* Metric.update(Metrics.serverEventLoopUtilization, readings.utilization);
-  yield* Metric.update(
-    Metrics.serverEventLoopDelayMax,
-    Math.max(0, Math.round(readings.delayMaxNs / 1e6) - RESOLUTION_MS),
-  );
-  if (readings.elapsedMs > 0) {
-    yield* Metric.update(Metrics.serverCpuUtilization, cpuMs / readings.elapsedMs);
-  }
-});
-
 const encodeStallLine = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 export interface StallLogOptions {
@@ -173,7 +156,6 @@ const layerWith = (
       );
       const tick = Effect.gen(function* () {
         const readings = yield* sample;
-        yield* recordGauges(readings);
         const delayMaxMs = stallMs(readings);
         if (delayMaxMs === undefined) return;
         const { utilization, usage, rssBytes, loadAverage, cpuCount } = readings;
@@ -249,10 +231,10 @@ const layerWith = (
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
-    const { serverTracePath } = yield* ServerConfig.ServerConfig;
+    const { logsDir } = yield* ServerConfig.ServerConfig;
     const path = yield* Path.Path;
     return layerWith(makeNodeSampler, {
-      filePath: path.join(path.dirname(serverTracePath), "event-loop-stalls.ndjson"),
+      filePath: path.join(logsDir, "event-loop-stalls.ndjson"),
       maxBytes: STALL_LOG_MAX_BYTES,
     });
   }),

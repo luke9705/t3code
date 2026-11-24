@@ -22,11 +22,6 @@ export interface CloudPublicConfig {
   readonly relay: {
     readonly url: string | null;
   };
-  readonly observability: {
-    readonly tracesUrl: string | null;
-    readonly tracesDataset: string | null;
-    readonly tracesToken: string | null;
-  };
 }
 
 type UntrustedSection<T> = {
@@ -65,35 +60,12 @@ export function resolveCloudPublicConfig(extra: ExpoExtra = Constants.expoConfig
     relay: {
       url: normalizeSecureRelayUrl(trimNonEmpty(extra?.relay?.url) ?? ""),
     },
-    observability: {
-      tracesUrl: normalizeSecureUrl(extra?.observability?.tracesUrl),
-      tracesDataset: trimNonEmpty(extra?.observability?.tracesDataset),
-      tracesToken: trimNonEmpty(extra?.observability?.tracesToken),
-    },
   } satisfies CloudPublicConfig;
 }
 
 export function hasCloudPublicConfig(): boolean {
   const config = resolveCloudPublicConfig();
   return Boolean(config.clerk.publishableKey && config.clerk.jwtTemplate && config.relay.url);
-}
-
-type Configured<T> = {
-  readonly [Key in keyof T]: NonNullable<T[Key]>;
-};
-
-type TracingPublicConfig = Omit<CloudPublicConfig, "observability"> & {
-  readonly observability: Configured<CloudPublicConfig["observability"]>;
-};
-
-export function hasTracingPublicConfig(
-  config: CloudPublicConfig = resolveCloudPublicConfig(),
-): config is TracingPublicConfig {
-  return Boolean(
-    config.observability.tracesUrl &&
-    config.observability.tracesDataset &&
-    config.observability.tracesToken,
-  );
 }
 
 export function resolveRelayClerkTokenOptions() {

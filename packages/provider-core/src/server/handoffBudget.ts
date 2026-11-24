@@ -69,7 +69,7 @@ export function latestNativeContextUsage(
 export function contextUsageForHandoff(input: {
   readonly sameNativeThread: boolean;
   readonly sameSelection: boolean;
-  readonly reuseTelemetry: boolean;
+  readonly reuseReportedWindow: boolean;
   readonly previousUsage: ThreadTokenUsageSnapshot | null | undefined;
   readonly knownModelWindow?: number | undefined;
 }): ThreadTokenUsageSnapshot | null {
@@ -79,7 +79,7 @@ export function contextUsageForHandoff(input: {
     input.previousUsage.maxTokens != null && input.previousUsage.maxTokens > 0
       ? input.previousUsage.maxTokens
       : undefined;
-  const maxTokens = input.reuseTelemetry ? reportedMax : (input.knownModelWindow ?? reportedMax);
+  const maxTokens = input.reuseReportedWindow ? reportedMax : (input.knownModelWindow ?? reportedMax);
   return {
     usedTokens: input.previousUsage.usedTokens,
     ...(maxTokens === undefined ? {} : { maxTokens }),

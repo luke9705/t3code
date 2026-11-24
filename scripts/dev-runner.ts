@@ -710,7 +710,7 @@ const prepareFirstStart = Effect.fn("dev-runner.prepareFirstStart")(function* (i
       );
       if (exitCode !== 0) {
         yield* Effect.logWarning(
-          "[dev-runner] could not build the resource monitor; starting without process telemetry. Install Rust and run `vp run build:resource-monitor`.",
+          "[dev-runner] could not build the resource monitor; starting without process monitoring. Install Rust and run `vp run build:resource-monitor`.",
         );
       }
     }

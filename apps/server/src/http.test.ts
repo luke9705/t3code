@@ -13,7 +13,6 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
-import * as Tracer from "effect/Tracer";
 import { HttpClient, HttpClientRequest, HttpRouter, HttpServerResponse } from "effect/http";
 import { openMediaFile } from "./assets/MediaFile.ts";
 
@@ -232,46 +231,6 @@ describe("browser API CORS", () => {
       await dispose();
     }
   });
-});
-
-describe("untraced requests", () => {
-  it.effect("starts a separate trace for each request, not the server's lifetime trace", () =>
-    Effect.gen(function* () {
-      const requestSpans: Array<Tracer.NativeSpan> = [];
-      const layerTracer = Layer.succeed(
-        Tracer.Tracer,
-        Tracer.make({
-          span: (options) => {
-            const span = new Tracer.NativeSpan(options);
-            if (options.kind === "server") requestSpans.push(span);
-            return span;
-          },
-        }),
-      );
-      const layerRoutes = Layer.effectDiscard(
-        Effect.gen(function* () {
-          const router = yield* HttpRouter.HttpRouter;
-          yield* router.add("GET", "/api/environment", HttpServerResponse.empty());
-        }),
-      );
-      const services = yield* Layer.build(
-        HttpRouter.serve(layerRoutes, { disableListenLog: true, disableLogger: true }).pipe(
-          ServerHttp.withRootRequestSpans,
-          Layer.provideMerge(NodeHttpServer.layerTest),
-        ),
-      ).pipe(Effect.withSpan("server.lifetime"), Effect.provide(layerTracer));
-      // Without a traceparent header, the server alone decides each request's parent.
-      const client = Context.get(services, HttpClient.HttpClient);
-
-      for (let i = 0; i < 2; i++) {
-        yield* client
-          .execute(HttpClientRequest.get("/api/environment"))
-          .pipe(Effect.provideService(HttpClient.TracerPropagationEnabled, false));
-      }
-      expect(requestSpans.map((span) => span.parent._tag)).toEqual(["None", "None"]);
-      expect(new Set(requestSpans.map((span) => span.traceId)).size).toBe(2);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
 });
 
 const layerFileResponse = Layer.mergeAll(NodeHttpPlatform.layer, NodeServices.layer);

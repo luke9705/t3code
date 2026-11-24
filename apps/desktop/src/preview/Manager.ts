@@ -65,7 +65,7 @@ import { msg } from "gt-i18n";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { m } from "../i18n/messages.ts";
-import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
+import * as DesktopRendererHistory from "../hostMonitor/DesktopRendererHistory.ts";
 import {
   MENU_ACTION_CHANNEL,
   PREVIEW_ANNOTATION_VOICE_EVENT_CHANNEL,

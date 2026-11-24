@@ -129,7 +129,6 @@ import {
   requireThreadScope,
   threadLinkFor,
 } from "./McpInvocationContext.ts";
-import * as Metrics from "../observability/Metrics.ts";
 import {
   interactionModeRank,
   resolveInteractionMode,
@@ -2617,7 +2616,6 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.mapError((error) => failure("orchestration_error", error.message)));
         yield* Effect.annotateCurrentSpan({ "secret_request.status": "saved_pasted" });
-        yield* Metrics.increment(Metrics.secretRequestsTotal, { status: "saved_pasted" });
         return { status: "saved" as const, file };
       }
       const runId = run.id;
@@ -2731,7 +2729,6 @@ const make = Effect.gen(function* () {
               Effect.orElseSucceed(() => "timed_out" as const),
             );
       yield* Effect.annotateCurrentSpan({ "secret_request.status": status });
-      yield* Metrics.increment(Metrics.secretRequestsTotal, { status });
       if (status !== "saved") return { status, note: SECRET_REQUEST_UNSAVED_NOTE[status] };
       if (delivery === "file") {
         const saved = yield* secretRequests

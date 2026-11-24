@@ -54,8 +54,7 @@ once it has one.
 5. **Revocation that doesn't take effect.** A revoked session, device key,
    pairing link, or peer link that still works. The exception is documented:
    signed asset URLs last until they expire.
-6. **Credential exposure.** Tokens or secrets reaching logs, traces, telemetry,
-   the relay, socket URLs (outside short-lived tickets), the access read model,
+6. **Credential exposure.** Tokens or secrets reaching logs or the relay, socket URLs (outside short-lived tickets), the access read model,
    or error messages. A token sent to an address that has not answered as the
    expected environment. A token paired over HTTPS starting to travel over plain
    HTTP.

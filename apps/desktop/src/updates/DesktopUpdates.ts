@@ -9,7 +9,7 @@ import {
   type DesktopUpdateCheckResult,
   type DesktopUpdateState,
 } from "@t3tools/contracts";
-import { errorTag } from "@t3tools/shared/observability";
+import { errorTag } from "@t3tools/shared/errorTag";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";

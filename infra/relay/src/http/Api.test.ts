@@ -24,7 +24,6 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Tracer from "effect/Tracer";
 import * as Etag from "effect/http/Etag";
 import * as HttpEffect from "effect/http/HttpEffect";
 import * as HttpRouter from "effect/http/HttpRouter";
@@ -48,11 +47,9 @@ import {
   recoverEnvironmentTunnelRecord,
   registerEnvironmentTunnelRecovery,
   relayDpopFailureReason,
-  traceRelayHttpRequestWith,
   unlinkEnvironmentRecord,
   verifyRelayClientBearerToken,
   verifyEnvironmentTunnelRecoveryProof,
-  withoutCapturedParentSpan,
 } from "./Api.ts";
 import * as RelayHttpApi from "./Api.ts";
 import * as RelayConfiguration from "../Config.ts";
@@ -1333,60 +1330,6 @@ describe("relay environment unlink", () => {
       ),
     );
   });
-});
-
-describe("relay request tracing", () => {
-  it.effect(
-    "does not parent endpoint spans to an ambient parent captured while building handlers",
-    () =>
-      Effect.gen(function* () {
-        const spans: Array<Tracer.NativeSpan> = [];
-        const tracer = Tracer.make({
-          span: (options) => {
-            const span = new Tracer.NativeSpan(options);
-            spans.push(span);
-            return span;
-          },
-        });
-        const ambientParent = Tracer.externalSpan({
-          traceId: "00000000000000000000000000000001",
-          spanId: "0000000000000001",
-          sampled: true,
-        });
-        const endpoint = yield* withoutCapturedParentSpan(
-          Effect.context<never>().pipe(
-            Effect.map((capturedContext: Context.Context<never>) =>
-              Effect.succeed(HttpServerResponse.empty({ status: 204 })).pipe(
-                Effect.withSpan("relay.test.endpoint"),
-                Effect.provideContext(capturedContext),
-              ),
-            ),
-          ),
-        ).pipe(Effect.provideService(Tracer.ParentSpan, ambientParent));
-        const request = HttpServerRequest.fromWeb(
-          new Request("https://relay.test/v1/mobile/devices?client=mobile", {
-            method: "POST",
-            headers: {
-              authorization: "Bearer secret",
-              dpop: "signed-proof",
-            },
-          }),
-        );
-
-        yield* traceRelayHttpRequestWith(endpoint, Layer.succeed(Tracer.Tracer, tracer)).pipe(
-          Effect.provideService(HttpServerRequest.HttpServerRequest, request),
-        );
-
-        expect(spans.map((span) => span.name)).toEqual(["POST", "relay.test.endpoint"]);
-        expect(spans[0]?.kind).toBe("server");
-        expect(spans[0]?.attributes.get("url.path")).toBe("/v1/mobile/devices");
-        expect(spans[0]?.attributes.get("http.response.status_code")).toBe(204);
-        expect(spans[0]?.attributes.get("http.request.header.authorization")).toBeUndefined();
-        expect(spans[0]?.attributes.get("http.request.header.dpop")).toBeUndefined();
-        expect(Option.isNone(spans[0]!.parent)).toBe(true);
-        expect(Option.getOrUndefined(spans[1]!.parent)?.spanId).toBe(spans[0]?.spanId);
-      }),
-  );
 });
 
 describe("relay routing fallback", () => {

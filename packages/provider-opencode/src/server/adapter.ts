@@ -11,7 +11,7 @@ import type {
 } from "@opencode-ai/sdk/v2";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
-import { causeErrorTag } from "@t3tools/shared/observability";
+import { causeErrorTag } from "@t3tools/shared/errorTag";
 import {
   type AgentFeedbackMode,
   defaultInstanceIdForDriver,

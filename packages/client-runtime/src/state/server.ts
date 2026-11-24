@@ -1602,10 +1602,6 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:provider:install-remove",
       tag: WS_METHODS.providerInstallRemove,
     }),
-    traceDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:trace-diagnostics",
-      tag: WS_METHODS.serverGetTraceDiagnostics,
-    }),
     npmRelease: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:npm-release",
       tag: WS_METHODS.serverGetNpmRelease,
@@ -1700,14 +1696,14 @@ export function createServerEnvironmentAtoms<R, E>(
         );
       },
     }),
-    resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
-      label: "environment-data:server:resource-telemetry",
-      tag: WS_METHODS.subscribeResourceTelemetry,
+    resourceMonitor: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:resource-monitor",
+      tag: WS_METHODS.subscribeResourceMonitor,
       idleTtlMs: 0,
     }),
-    resourceTelemetryHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:resource-telemetry-history",
-      tag: WS_METHODS.serverGetResourceTelemetryHistory,
+    resourceMonitorHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:resource-monitor-history",
+      tag: WS_METHODS.serverGetResourceMonitorHistory,
       staleTimeMs: 5_000,
       refreshIntervalMs: 5_000,
       idleTtlMs: 0,
@@ -2018,10 +2014,6 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId }) => environmentId,
       },
     }),
-    checkOtlpEndpoint: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:check-otlp-endpoint",
-      tag: WS_METHODS.serverCheckOtlpEndpoint,
-    }),
     checkSecretSource: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:check-secret-source",
       tag: WS_METHODS.serverCheckSecretSource,
@@ -2030,9 +2022,9 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:list-text-generator-models",
       tag: WS_METHODS.serverListTextGeneratorModels,
     }),
-    retryResourceTelemetry: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:retry-resource-telemetry",
-      tag: WS_METHODS.serverRetryResourceTelemetry,
+    retryResourceMonitor: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:retry-resource-monitor",
+      tag: WS_METHODS.serverRetryResourceMonitor,
       concurrency: {
         mode: "singleFlight",
         key: ({ environmentId }) => environmentId,

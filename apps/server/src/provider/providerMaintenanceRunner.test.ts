@@ -770,7 +770,7 @@ describe("providerMaintenanceRunner", () => {
           stdout: "Current version: 2.1.310\nChecking for updates to latest version...\n",
           stderr: [
             "Error: Failed to install native update",
-            "TelemetrySafeError: Failed to fetch version from https://downloads.claude.ai/claude-code-releases/latest after 3 attempt(s): Request failed with status code 403",
+            "VersionCheckError: Failed to fetch version from https://downloads.claude.ai/claude-code-releases/latest after 3 attempt(s): Request failed with status code 403",
             'Try running "claude doctor" for diagnostics',
             "",
           ].join("\n"),

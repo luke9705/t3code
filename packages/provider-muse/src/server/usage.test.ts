@@ -82,7 +82,7 @@ it("keeps individual inference identity across copied parent/child envelopes", (
   expect(fallback[0]?.dedupeKey).toBe(JSON.stringify(["muse", original.id]));
 });
 
-it("includes automated review inference models and ignores workflow and telemetry rollups", () => {
+it("includes automated review inference models and ignores workflow rollups", () => {
   const value = entry();
   expect(
     parse({
@@ -107,7 +107,7 @@ it("includes automated review inference models and ignores workflow and telemetr
       parse({ ...value, payload: { ...value.payload, event: { ...value.payload.event, kind } } }),
     ).toEqual([]);
   }
-  expect(parse({ ...value, payload_type: "run.telemetry" })).toEqual([]);
+  expect(parse({ ...value, payload_type: "run.workflow" })).toEqual([]);
   expect(parse({ ...value, record_type: "snapshot" })).toEqual([]);
   expect(parse({ ...value, stream: { kind: "run", id: "run-1" } })).toEqual([]);
 });

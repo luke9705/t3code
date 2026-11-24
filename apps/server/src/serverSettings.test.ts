@@ -412,7 +412,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
 
       yield* serverSettings.updateSettings({
-        observability: { otlpTracesUrl: "http://localhost:4318/v1/traces" },
         textGenerationModelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model,
@@ -428,14 +427,13 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       });
 
       const next = yield* serverSettings.updateSettings({
-        observability: { otlpMetricsUrl: "http://localhost:4318/v1/metrics" },
+        responseStreamingMode: "turn",
         textGenerationModelSelection: {
           options: [{ id: "fastMode", value: false }],
         },
       });
 
-      assert.equal(next.observability.otlpTracesUrl, "http://localhost:4318/v1/traces");
-      assert.equal(next.observability.otlpMetricsUrl, "http://localhost:4318/v1/metrics");
+      assert.equal(next.responseStreamingMode, "turn");
       assert.deepEqual(
         next.textGenerationModelSelection,
         createModelSelection(
@@ -461,13 +459,23 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         filePath: config.settingsPath,
         contents: `{ "responseStreamingMode": "turn" }`,
       });
+      const defaultModel = DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model;
+      const defaultEffort = DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.options?.find(
+        (option) => option.id === "reasoningEffort",
+      )?.value;
       yield* serverSettings.updateSettings({
-        observability: { otlpTracesUrl: "http://localhost:4318/v1/traces" },
+        textGenerationModelSelection: {
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
       });
 
       const saved = yield* decodeServerSettingsJson(yield* fs.readFileString(config.settingsPath));
       assert.equal(saved.responseStreamingMode, "turn");
-      assert.equal(saved.observability.otlpTracesUrl, "http://localhost:4318/v1/traces");
+      assert.equal(saved.textGenerationModelSelection.model, defaultModel);
+      const savedEffort = saved.textGenerationModelSelection.options?.find(
+        (option) => option.id === "reasoningEffort",
+      )?.value;
+      assert.notEqual(savedEffort, defaultEffort);
 
       yield* writeFileStringAtomically({
         filePath: config.settingsPath,
@@ -503,7 +511,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
 
       const error = yield* Effect.flip(
         serverSettings.updateSettings({
-          observability: { otlpTracesUrl: "http://localhost:4318/v1/traces" },
+          textGenerationModelSelection: { options: [{ id: "fastMode", value: true }] },
         }),
       );
 

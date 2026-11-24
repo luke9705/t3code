@@ -1082,8 +1082,6 @@ export function NewTaskDraftScreen(props: {
           environmentRuntime ? runtimeConnectionErrorText(environmentRuntime, m) : null
         }
         environmentLabel={selectedEnvironmentLabel}
-        feedbackSubmissions={[]}
-        onDismissFeedback={() => {}}
         selectedThreadFeed={[]}
         activityRun={null}
         activeWorkStartedAt={null}

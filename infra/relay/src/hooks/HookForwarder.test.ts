@@ -9,7 +9,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as Tracer from "effect/Tracer";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
 import type * as HttpClientRequest from "effect/http/HttpClientRequest";
@@ -26,7 +25,7 @@ import * as CloudMintSigner from "../auth/CloudMintSigner.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as ManagedEndpointAllocations from "../environments/ManagedEndpointAllocations.ts";
-import { RELAY_HTTP_ROUTER_CONFIG, traceRelayHttpRequestWith } from "../http/Api.ts";
+import { RELAY_HTTP_ROUTER_CONFIG, withRelayRequestDeadline } from "../http/Api.ts";
 import * as RelayHttpApi from "../http/Api.ts";
 import * as HookForwarder from "./HookForwarder.ts";
 import { RELAY_HOOK_DELIVERY_TYP, verifyRelayJwt } from "@t3tools/shared/relayJwt";
@@ -454,47 +453,6 @@ describe("HookForwarder", () => {
       const response = yield* harness.send(new Request(hookUrl(), { method: "POST" }));
       expect(response.status).toBe(429);
       expect(harness.sent).toHaveLength(0);
-    }),
-  );
-
-  it.effect("never records the token in the server span", () =>
-    Effect.gen(function* () {
-      const spans: Array<Tracer.NativeSpan> = [];
-      const tracer = Tracer.make({
-        span: (options) => {
-          const span = new Tracer.NativeSpan(options);
-          spans.push(span);
-          return span;
-        },
-      });
-      const harness = makeHarness();
-      const handler = yield* harness.httpEffect;
-      const response = yield* traceRelayHttpRequestWith(
-        handler,
-        Layer.succeed(Tracer.Tracer, tracer),
-      ).pipe(
-        Effect.provideService(
-          HttpServerRequest.HttpServerRequest,
-          HttpServerRequest.fromWeb(
-            new Request(hookUrl("hook-1/super-secret-token", "?sig=also-secret"), {
-              method: "POST",
-              headers: { "x-gitlab-token": "header-secret" },
-              body: "{}",
-            }),
-          ),
-        ),
-      );
-      expect(response.status).toBe(200);
-      expect(harness.sent[0]?.url).toContain("super-secret-token");
-      yield* Effect.yieldNow;
-      const serialized = spans
-        .flatMap((span) => [span.name, ...Array.from(span.attributes.values(), String)])
-        .join("\n");
-      expect(serialized).not.toContain("super-secret-token");
-      expect(serialized).not.toContain("also-secret");
-      expect(serialized).not.toContain("header-secret");
-      const server = spans.find((span) => span.kind === "server");
-      expect(server?.attributes.get("url.path")).toBe(`/v1/hooks/${endpointKey}/hook-1/redacted`);
     }),
   );
 

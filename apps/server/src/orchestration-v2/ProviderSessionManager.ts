@@ -44,13 +44,6 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
-import { normalizeModelMetricLabel } from "../observability/Attributes.ts";
-import {
-  providerSessionsTotal,
-  providerTurnDuration,
-  providerTurnsTotal,
-  withMetrics,
-} from "../observability/Metrics.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -1591,16 +1584,7 @@ export const layerWithOptions = (
                   if (Option.isSome(closeExit) && Exit.isFailure(closeExit.value)) {
                     return yield* Effect.failCause(closeExit.value.cause);
                   }
-                }).pipe(
-                  withMetrics({
-                    counter: providerSessionsTotal,
-                    attributes: {
-                      provider: entry.runtime.driver,
-                      operation: "release",
-                      reason: input.reason,
-                    },
-                  }),
-                ),
+                }),
             }),
           ([entry]) =>
             Option.match(entry, {
@@ -2524,16 +2508,6 @@ export const layerWithOptions = (
       ): ProviderAdapter.ProviderAdapterV2SessionRuntime => {
         const providerSessionId = runtime.providerSessionId;
         const subscribeEvents = makeEventSubscription(eventSubscribers);
-        const turnMetrics = (operation: string, model?: string) =>
-          withMetrics({
-            counter: providerTurnsTotal,
-            ...(operation === "send" ? { timer: providerTurnDuration } : {}),
-            attributes: {
-              provider: runtime.driver,
-              operation,
-              modelFamily: normalizeModelMetricLabel(model),
-            },
-          });
         // A start, continuation or compaction keeps the session busy until its turn.terminal.
         const busyTurn = <E>(
           input: Pick<
@@ -2740,19 +2714,14 @@ export const layerWithOptions = (
             ),
           startTurn: (input) =>
             busyTurn(input, () =>
-              agentFeedbackMode.pipe(
-                Effect.flatMap((agentFeedback) => runtime.startTurn({ ...input, agentFeedback })),
-                turnMetrics("send", input.modelSelection.model),
-              ),
+              agentFeedbackMode.pipe(Effect.flatMap((agentFeedback) => runtime.startTurn({ ...input, agentFeedback }))),
             ),
           ...(runtime.resumeTurn === undefined
             ? {}
             : {
                 resumeTurn: (input: ProviderAdapter.ProviderAdapterV2ResumeTurnInput) =>
                   busyTurn(input, () =>
-                    runtime.resumeTurn!(input).pipe(
-                      turnMetrics("resume", input.modelSelection.model),
-                    ),
+                    runtime.resumeTurn!(input),
                   ),
               }),
           ...(runtime.compactThread === undefined
@@ -2760,14 +2729,12 @@ export const layerWithOptions = (
             : {
                 compactThread: (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
                   busyTurn(input, () =>
-                    runtime.compactThread!(input).pipe(
-                      turnMetrics("compact", input.modelSelection.model),
-                    ),
+                    runtime.compactThread!(input),
                   ),
               }),
           steerTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
-              Effect.andThen(runtime.steerTurn(input).pipe(turnMetrics("steer"))),
+              Effect.andThen(runtime.steerTurn(input)),
             ),
           // A provider starved of memory can stop answering, so no caller may wait on it unbounded.
           interruptTurn: (input) =>
@@ -2786,7 +2753,6 @@ export const layerWithOptions = (
                         }),
                       ),
                   }),
-                  turnMetrics("interrupt"),
                 ),
               ),
             ),
@@ -2794,8 +2760,7 @@ export const layerWithOptions = (
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
               Effect.andThen(
                 runtime
-                  .respondToRuntimeRequest(input)
-                  .pipe(turnMetrics("runtime-request-response")),
+                  .respondToRuntimeRequest(input),
               ),
             ),
         };
@@ -3356,10 +3321,6 @@ export const layerWithOptions = (
                         cause,
                       }),
                   ),
-                  withMetrics({
-                    counter: providerSessionsTotal,
-                    attributes: { provider: adapter.driver, operation: "open" },
-                  }),
                 );
               const eventSubscribers = yield* Ref.make<
                 ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>

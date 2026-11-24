@@ -93,7 +93,7 @@ function claudeErrorResult(stdout: string): string | undefined {
     .map((message) =>
       (
         message.result ??
-        // error_during_execution mixes CLI telemetry into the list.
+        // error_during_execution mixes CLI diagnostics into the list.
         message.errors?.filter((error) => !error.startsWith("[ede_diagnostic]")).join("\n") ??
         ""
       ).trim(),

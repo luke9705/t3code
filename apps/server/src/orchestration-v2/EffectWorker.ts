@@ -7,18 +7,11 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as SqlError from "effect/sql/SqlError";
 
-import {
-  increment,
-  metricAttributes,
-  orchestrationEffectClaimsTotal,
-  orchestrationEffectQueueWait,
-} from "../observability/Metrics.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -915,13 +908,6 @@ export const layerWithOptions = (
       const runOnce = Effect.fnUntraced(
         function* (filter: ClaimFilter = {}) {
           const claimExit = yield* Effect.exit(outbox.claimNext({ workerId, ...filter }));
-          yield* increment(orchestrationEffectClaimsTotal, {
-            result: Exit.isFailure(claimExit)
-              ? "error"
-              : Option.isNone(claimExit.value)
-                ? "empty"
-                : "claimed",
-          });
           if (Exit.isFailure(claimExit)) return yield* Effect.failCause(claimExit.cause);
           const claimed = claimExit.value;
           if (Option.isNone(claimed)) {
@@ -933,18 +919,6 @@ export const layerWithOptions = (
             .awaitCancellation(effect.id)
             .pipe(Effect.as("cancelled" as const));
           const cancelledBeforeExecution = yield* Effect.gen(function* () {
-            const claimedAt = DateTime.toEpochMillis(yield* DateTime.now);
-            const eligibleAt = Math.max(
-              DateTime.toEpochMillis(DateTime.makeUnsafe(effect.createdAt)),
-              DateTime.toEpochMillis(DateTime.makeUnsafe(effect.availableAt)),
-            );
-            yield* Metric.update(
-              Metric.withAttributes(
-                orchestrationEffectQueueWait,
-                metricAttributes({ effect_type: effect.request.type }),
-              ),
-              Duration.millis(Math.max(0, claimedAt - eligibleAt)),
-            );
             // Recheck durable cancellation after registering the Deferred; cancellation may have committed after claim.
             if (yield* wasCancelled(effect.id)) {
               yield* outbox.clearCancellation(effect.id);

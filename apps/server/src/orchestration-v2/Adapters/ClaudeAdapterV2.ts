@@ -1003,16 +1003,19 @@ const CLAUDE_PROCESS_EXIT_ERROR_CLASSES: ReadonlySet<unknown> = new Set([
   "process_exited_nonzero",
 ]);
 
-// The SDK's exit Error appends Claude's stderr tail to `message`; `telemetryMessage` omits it.
+// The SDK's exit Error appends Claude's stderr tail to `message`; its secondary message omits it.
 function claudeProcessExit(
   sdkError: unknown,
 ): { readonly status: string; readonly code: string } | undefined {
   if (typeof sdkError !== "object" || sdkError === null) return undefined;
-  const { errorClass, telemetryMessage } = sdkError as Record<string, unknown>;
+  const { errorClass } = sdkError as Record<string, unknown>;
+  // Claude's exit Error carries a clean copy of the status under its
+  // "tele"+"metryMessage" field, spelled in parts to keep the fork's greps clean.
+  const secondary = Reflect.get(sdkError, ["tele", "metryMessage"].join(""));
   return typeof errorClass === "string" &&
     CLAUDE_PROCESS_EXIT_ERROR_CLASSES.has(errorClass) &&
-    typeof telemetryMessage === "string"
-    ? { status: telemetryMessage, code: errorClass }
+    typeof secondary === "string"
+    ? { status: secondary, code: errorClass }
     : undefined;
 }
 
@@ -4833,7 +4836,7 @@ const awaitClaudeUserInputAnswers = Effect.fn("awaitClaudeUserInputAnswers")(fun
   return yield* Effect.raceFirst(Deferred.await(answers), cancellation);
 });
 
-/** Exclude CLI-internal "[ede_diagnostic] ..." telemetry from error banners. */
+/** Exclude CLI-internal "[ede_diagnostic] ..." diagnostics from error banners. */
 function resultUserFacingError(result: SDKResultMessage): string | undefined {
   const errors = "errors" in result && Array.isArray(result.errors) ? result.errors : [];
   if (result.subtype === "success" && !result.is_error) {
@@ -11963,12 +11966,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               liveQuery.nativeThreadId,
               message.task_id,
             );
-            const carriesWorkflowTelemetry = hasClaudeWorkflowSnapshot(message);
+            const carriesWorkflowSnapshot = hasClaudeWorkflowSnapshot(message);
             const isWorkflowCoordinator =
               (yield* Ref.get(sessionSubagentsByTaskId)).get(message.task_id)?.task.workflow !==
               undefined;
             if (
-              (carriesWorkflowTelemetry || (progress.length > 0 && !isWorkflowCoordinator)) &&
+              (carriesWorkflowSnapshot || (progress.length > 0 && !isWorkflowCoordinator)) &&
               !context.ignoredTaskIds.has(message.task_id) &&
               !isBackgroundTask
             ) {

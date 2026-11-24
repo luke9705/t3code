@@ -35,7 +35,7 @@ and JSON escaping. Imported history has a separate 64,000-byte ceiling; your cur
 attachment payloads do not consume that ceiling.
 
 T3 Code uses available capacity information for your selected model and options, together with
-provider context telemetry. Starting a fresh provider conversation clears prior usage, while keeping
+provider context usage data. Starting a fresh provider conversation clears prior usage, while keeping
 known model capacity. Changing models or context-window options discards stale usage and compaction
 thresholds.
 
@@ -43,6 +43,6 @@ When no capacity information is available, T3 Code assumes a 128,000-token windo
 least 16,000 tokens, or a quarter of the window when larger, for instructions, tools, and subsequent
 work. Images reserve an estimated 8,192 tokens each, independent of their file size; other
 attachments reserve 4,096 each for their references. Existing context is estimated from saved
-activity when usage telemetry is unavailable. Known smaller windows still constrain the handoff.
+activity when usage data is unavailable. Known smaller windows still constrain the handoff.
 These are fallback estimates, not exact token counts. Image resolution, custom models, and hidden
 native context can differ, so the provider may still reject an input.

@@ -366,43 +366,6 @@ export const isProviderAvailable = (snapshot: ServerProvider): boolean =>
 export const isProviderTextGenerationCapable = (snapshot: ServerProvider): boolean =>
   snapshot.supportsTextGeneration !== false;
 
-export const OtlpEndpointSource = Schema.Literals(["environment", "bootstrap", "settings"]);
-export type OtlpEndpointSource = typeof OtlpEndpointSource.Type;
-
-export const ServerObservability = Schema.Struct({
-  logsDirectoryPath: TrimmedNonEmptyString,
-  localTracingEnabled: Schema.Boolean,
-  otlpTracesUrl: Schema.optional(TrimmedNonEmptyString),
-  otlpTracesSource: Schema.optional(OtlpEndpointSource),
-  otlpTracesVariable: Schema.optional(TrimmedNonEmptyString),
-  otlpTracesEnabled: Schema.Boolean,
-  otlpMetricsUrl: Schema.optional(TrimmedNonEmptyString),
-  otlpMetricsSource: Schema.optional(OtlpEndpointSource),
-  otlpMetricsVariable: Schema.optional(TrimmedNonEmptyString),
-  otlpMetricsEnabled: Schema.Boolean,
-  otlpLogsUrl: Schema.optional(TrimmedNonEmptyString),
-  otlpLogsSource: Schema.optional(OtlpEndpointSource),
-  otlpLogsVariable: Schema.optional(TrimmedNonEmptyString),
-  otlpLogsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-});
-export type ServerObservability = typeof ServerObservability.Type;
-
-export const OtlpSignal = Schema.Literals(["traces", "metrics", "logs"]);
-export type OtlpSignal = typeof OtlpSignal.Type;
-
-export const OtlpEndpointCheckInput = Schema.Struct({
-  signal: OtlpSignal,
-  url: TrimmedNonEmptyString.check(Schema.isPattern(/^https?:\/\/./i)),
-});
-export type OtlpEndpointCheckInput = typeof OtlpEndpointCheckInput.Type;
-
-export const OtlpEndpointCheckResult = Schema.Union([
-  Schema.TaggedStruct("Accepted", { latencyMs: Schema.Number }),
-  Schema.TaggedStruct("Rejected", { status: Schema.Number }),
-  Schema.TaggedStruct("Unreachable", { timedOut: Schema.Boolean }),
-]);
-export type OtlpEndpointCheckResult = typeof OtlpEndpointCheckResult.Type;
-
 /** The client tells the server what it is, so the triage context can name it. */
 export const ServerPrepareTriageInput = Schema.Struct({
   client: AuthClientPresentationMetadata,
@@ -429,89 +392,6 @@ export class ServerPrepareTriageError extends Schema.TaggedError<ServerPrepareTr
     return "Could not write the triage session files.";
   }
 }
-
-export const ServerTraceDiagnosticsErrorKind = Schema.Literals([
-  "trace-file-not-found",
-  "trace-file-read-failed",
-]);
-export type ServerTraceDiagnosticsErrorKind = typeof ServerTraceDiagnosticsErrorKind.Type;
-
-export const ServerTraceDiagnosticsSpanSummary = Schema.Struct({
-  name: TrimmedNonEmptyString,
-  count: NonNegativeInt,
-  failureCount: NonNegativeInt,
-  totalDurationMs: Schema.Number,
-  averageDurationMs: Schema.Number,
-  maxDurationMs: Schema.Number,
-});
-export type ServerTraceDiagnosticsSpanSummary = typeof ServerTraceDiagnosticsSpanSummary.Type;
-
-export const ServerTraceDiagnosticsFailureSummary = Schema.Struct({
-  name: TrimmedNonEmptyString,
-  cause: TrimmedNonEmptyString,
-  count: NonNegativeInt,
-  lastSeenAt: Schema.DateTimeUtc,
-  traceId: TrimmedNonEmptyString,
-  spanId: TrimmedNonEmptyString,
-});
-export type ServerTraceDiagnosticsFailureSummary = typeof ServerTraceDiagnosticsFailureSummary.Type;
-
-export const ServerTraceDiagnosticsRecentFailure = Schema.Struct({
-  name: TrimmedNonEmptyString,
-  cause: TrimmedNonEmptyString,
-  durationMs: Schema.Number,
-  endedAt: Schema.DateTimeUtc,
-  traceId: TrimmedNonEmptyString,
-  spanId: TrimmedNonEmptyString,
-});
-export type ServerTraceDiagnosticsRecentFailure = typeof ServerTraceDiagnosticsRecentFailure.Type;
-
-export const ServerTraceDiagnosticsSpanOccurrence = Schema.Struct({
-  name: TrimmedNonEmptyString,
-  durationMs: Schema.Number,
-  endedAt: Schema.DateTimeUtc,
-  traceId: TrimmedNonEmptyString,
-  spanId: TrimmedNonEmptyString,
-});
-export type ServerTraceDiagnosticsSpanOccurrence = typeof ServerTraceDiagnosticsSpanOccurrence.Type;
-
-export const ServerTraceDiagnosticsLogEvent = Schema.Struct({
-  spanName: TrimmedNonEmptyString,
-  level: TrimmedNonEmptyString,
-  message: TrimmedNonEmptyString,
-  seenAt: Schema.DateTimeUtc,
-  traceId: TrimmedNonEmptyString,
-  spanId: TrimmedNonEmptyString,
-});
-export type ServerTraceDiagnosticsLogEvent = typeof ServerTraceDiagnosticsLogEvent.Type;
-
-export const ServerTraceDiagnosticsResult = Schema.Struct({
-  traceFilePath: TrimmedNonEmptyString,
-  scannedFilePaths: Schema.Array(TrimmedNonEmptyString),
-  readAt: Schema.DateTimeUtc,
-  recordCount: NonNegativeInt,
-  parseErrorCount: NonNegativeInt,
-  firstSpanAt: Schema.Option(Schema.DateTimeUtc),
-  lastSpanAt: Schema.Option(Schema.DateTimeUtc),
-  failureCount: NonNegativeInt,
-  interruptionCount: NonNegativeInt,
-  slowSpanThresholdMs: NonNegativeInt,
-  slowSpanCount: NonNegativeInt,
-  logLevelCounts: Schema.Record(TrimmedNonEmptyString, NonNegativeInt),
-  topSpansByCount: Schema.Array(ServerTraceDiagnosticsSpanSummary),
-  slowestSpans: Schema.Array(ServerTraceDiagnosticsSpanOccurrence),
-  commonFailures: Schema.Array(ServerTraceDiagnosticsFailureSummary),
-  latestFailures: Schema.Array(ServerTraceDiagnosticsRecentFailure),
-  latestWarningAndErrorLogs: Schema.Array(ServerTraceDiagnosticsLogEvent),
-  partialFailure: Schema.Option(Schema.Boolean),
-  error: Schema.Option(
-    Schema.Struct({
-      kind: ServerTraceDiagnosticsErrorKind,
-      message: TrimmedNonEmptyString,
-    }),
-  ),
-});
-export type ServerTraceDiagnosticsResult = typeof ServerTraceDiagnosticsResult.Type;
 
 export const ServerProcessSignal = Schema.Literals(["SIGINT", "SIGKILL"]);
 export type ServerProcessSignal = typeof ServerProcessSignal.Type;
@@ -722,7 +602,6 @@ export const ServerConfig = Schema.Struct({
   remoteOpenTargets: Schema.optionalKey(ForwardCompatibleArray(RemoteOpenTarget)),
   /** Hints only; verify each address answers as this environment. */
   directEndpoints: Schema.optionalKey(ForwardCompatibleArray(ServerDirectEndpoint)),
-  observability: ServerObservability,
   settings: ServerSettings,
   /** Present when an administrator's policy file manages this environment. */
   managedPolicy: Schema.optionalKey(ManagedPolicySummary),

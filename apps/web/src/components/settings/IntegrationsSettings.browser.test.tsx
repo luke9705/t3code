@@ -34,12 +34,6 @@ const config = Schema.decodeSync(ServerConfig)({
   issues: [],
   providers: [],
   availableEditors: [],
-  observability: {
-    logsDirectoryPath: "/workspace/logs",
-    localTracingEnabled: false,
-    otlpTracesEnabled: false,
-    otlpMetricsEnabled: false,
-  },
   settings: {},
 });
 const environments: EnvironmentPresentation[] = [

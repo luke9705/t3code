@@ -43964,7 +43964,7 @@ export const ServerNotification__Thread = Schema.Struct({
     Schema.Union([
       Schema.String.annotate({
         description:
-          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution telemetry.",
+          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution data.",
       }),
       Schema.Null,
     ]),
@@ -44014,7 +44014,7 @@ export const ServerNotification__Thread = Schema.Struct({
   reasoningEffort: Schema.optionalKey(
     Schema.Union([ServerNotification__ReasoningEffort, Schema.Null]).annotate({
       description:
-        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution telemetry.",
+        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution data.",
     }),
   ),
   recencyAt: Schema.optionalKey(
@@ -44257,7 +44257,7 @@ export const V2ThreadForkResponse__Thread = Schema.Struct({
     Schema.Union([
       Schema.String.annotate({
         description:
-          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution telemetry.",
+          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution data.",
       }),
       Schema.Null,
     ]),
@@ -44307,7 +44307,7 @@ export const V2ThreadForkResponse__Thread = Schema.Struct({
   reasoningEffort: Schema.optionalKey(
     Schema.Union([V2ThreadForkResponse__ReasoningEffort, Schema.Null]).annotate({
       description:
-        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution telemetry.",
+        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution data.",
     }),
   ),
   recencyAt: Schema.optionalKey(
@@ -44450,7 +44450,7 @@ export const V2ThreadListResponse__Thread = Schema.Struct({
     Schema.Union([
       Schema.String.annotate({
         description:
-          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution telemetry.",
+          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution data.",
       }),
       Schema.Null,
     ]),
@@ -44500,7 +44500,7 @@ export const V2ThreadListResponse__Thread = Schema.Struct({
   reasoningEffort: Schema.optionalKey(
     Schema.Union([V2ThreadListResponse__ReasoningEffort, Schema.Null]).annotate({
       description:
-        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution telemetry.",
+        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution data.",
     }),
   ),
   recencyAt: Schema.optionalKey(
@@ -44643,7 +44643,7 @@ export const V2ThreadMetadataUpdateResponse__Thread = Schema.Struct({
     Schema.Union([
       Schema.String.annotate({
         description:
-          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution telemetry.",
+          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution data.",
       }),
       Schema.Null,
     ]),
@@ -44693,7 +44693,7 @@ export const V2ThreadMetadataUpdateResponse__Thread = Schema.Struct({
   reasoningEffort: Schema.optionalKey(
     Schema.Union([V2ThreadMetadataUpdateResponse__ReasoningEffort, Schema.Null]).annotate({
       description:
-        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution telemetry.",
+        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution data.",
     }),
   ),
   recencyAt: Schema.optionalKey(
@@ -44838,7 +44838,7 @@ export const V2ThreadReadResponse__Thread = Schema.Struct({
     Schema.Union([
       Schema.String.annotate({
         description:
-          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution telemetry.",
+          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution data.",
       }),
       Schema.Null,
     ]),
@@ -44888,7 +44888,7 @@ export const V2ThreadReadResponse__Thread = Schema.Struct({
   reasoningEffort: Schema.optionalKey(
     Schema.Union([V2ThreadReadResponse__ReasoningEffort, Schema.Null]).annotate({
       description:
-        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution telemetry.",
+        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution data.",
     }),
   ),
   recencyAt: Schema.optionalKey(
@@ -45031,7 +45031,7 @@ export const V2ThreadResumeResponse__Thread = Schema.Struct({
     Schema.Union([
       Schema.String.annotate({
         description:
-          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution telemetry.",
+          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution data.",
       }),
       Schema.Null,
     ]),
@@ -45081,7 +45081,7 @@ export const V2ThreadResumeResponse__Thread = Schema.Struct({
   reasoningEffort: Schema.optionalKey(
     Schema.Union([V2ThreadResumeResponse__ReasoningEffort, Schema.Null]).annotate({
       description:
-        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution telemetry.",
+        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution data.",
     }),
   ),
   recencyAt: Schema.optionalKey(
@@ -45225,7 +45225,7 @@ export const V2ThreadRevertResponse__Thread = Schema.Struct({
     Schema.Union([
       Schema.String.annotate({
         description:
-          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution telemetry.",
+          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution data.",
       }),
       Schema.Null,
     ]),
@@ -45275,7 +45275,7 @@ export const V2ThreadRevertResponse__Thread = Schema.Struct({
   reasoningEffort: Schema.optionalKey(
     Schema.Union([V2ThreadRevertResponse__ReasoningEffort, Schema.Null]).annotate({
       description:
-        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution telemetry.",
+        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution data.",
     }),
   ),
   recencyAt: Schema.optionalKey(
@@ -45419,7 +45419,7 @@ export const V2ThreadStartedNotification__Thread = Schema.Struct({
     Schema.Union([
       Schema.String.annotate({
         description:
-          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution telemetry.",
+          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution data.",
       }),
       Schema.Null,
     ]),
@@ -45469,7 +45469,7 @@ export const V2ThreadStartedNotification__Thread = Schema.Struct({
   reasoningEffort: Schema.optionalKey(
     Schema.Union([V2ThreadStartedNotification__ReasoningEffort, Schema.Null]).annotate({
       description:
-        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution telemetry.",
+        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution data.",
     }),
   ),
   recencyAt: Schema.optionalKey(
@@ -45614,7 +45614,7 @@ export const V2ThreadStartResponse__Thread = Schema.Struct({
     Schema.Union([
       Schema.String.annotate({
         description:
-          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution telemetry.",
+          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution data.",
       }),
       Schema.Null,
     ]),
@@ -45664,7 +45664,7 @@ export const V2ThreadStartResponse__Thread = Schema.Struct({
   reasoningEffort: Schema.optionalKey(
     Schema.Union([V2ThreadStartResponse__ReasoningEffort, Schema.Null]).annotate({
       description:
-        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution telemetry.",
+        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution data.",
     }),
   ),
   recencyAt: Schema.optionalKey(
@@ -45807,7 +45807,7 @@ export const V2ThreadUnarchiveResponse__Thread = Schema.Struct({
     Schema.Union([
       Schema.String.annotate({
         description:
-          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution telemetry.",
+          "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution data.",
       }),
       Schema.Null,
     ]),
@@ -45857,7 +45857,7 @@ export const V2ThreadUnarchiveResponse__Thread = Schema.Struct({
   reasoningEffort: Schema.optionalKey(
     Schema.Union([V2ThreadUnarchiveResponse__ReasoningEffort, Schema.Null]).annotate({
       description:
-        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution telemetry.",
+        "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution data.",
     }),
   ),
   recencyAt: Schema.optionalKey(

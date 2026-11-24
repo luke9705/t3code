@@ -1,5 +1,5 @@
 import type {
-  ResourceTelemetryProcessCategory,
+  ResourceMonitorProcessCategory,
   ServerProcessDiagnosticsEntry,
   ServerProcessDiagnosticsResult,
   ServerProcessSignal,
@@ -11,7 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import * as ResourceTelemetry from "../resourceTelemetry/ResourceTelemetry.ts";
+import * as ResourceMonitor from "../resourceMonitor/ResourceMonitor.ts";
 
 export class ProcessSignalFailed extends Schema.TaggedError<ProcessSignalFailed>()(
   "ProcessSignalFailed",
@@ -48,7 +48,7 @@ function formatElapsed(runTimeMs: number): string {
     : `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-function canSignalCategory(category: ResourceTelemetryProcessCategory): boolean {
+function canSignalCategory(category: ResourceMonitorProcessCategory): boolean {
   return (
     category === "server-child" || category === "provider-root" || category === "terminal-root"
   );
@@ -56,9 +56,9 @@ function canSignalCategory(category: ResourceTelemetryProcessCategory): boolean 
 
 /** @public */
 export const make = Effect.fn("makeProcessDiagnostics")(function* () {
-  const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
-  const refreshedTelemetry = telemetry.refresh.pipe(Effect.catch(() => telemetry.latest));
-  const read: ProcessDiagnostics["Service"]["read"] = refreshedTelemetry.pipe(
+  const monitor = yield* ResourceMonitor.ResourceMonitor;
+  const refreshed = monitor.refresh.pipe(Effect.catch(() => monitor.latest));
+  const read: ProcessDiagnostics["Service"]["read"] = refreshed.pipe(
     Effect.map((snapshot) => {
       const processes = snapshot.processes
         .filter((entry) => canSignalCategory(entry.category))
@@ -97,7 +97,7 @@ export const make = Effect.fn("makeProcessDiagnostics")(function* () {
           message: Option.some("Refusing to signal the T3 server process."),
         };
       }
-      const current = yield* telemetry.refresh.pipe(Effect.option);
+      const current = yield* monitor.refresh.pipe(Effect.option);
       if (Option.isNone(current)) {
         return {
           pid: input.pid,

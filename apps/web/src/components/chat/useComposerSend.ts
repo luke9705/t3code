@@ -40,11 +40,6 @@ import {
   sendApprovalFeedback,
 } from "@t3tools/client-runtime/state/thread-requests";
 import {
-  parseCodexFeedbackCommand,
-  submitCodexFeedback,
-  type CodexFeedbackSubmission,
-} from "@t3tools/client-runtime/state/threads";
-import {
   scopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
@@ -232,7 +227,6 @@ interface ComposerSendInput {
   readonly composerImagesRef: { current: ComposerImageAttachment[] };
   readonly composerFilesRef: { current: ComposerFileAttachment[] };
   readonly composerTerminalContextsRef: { current: TerminalContextDraft[] };
-  readonly feedbackUploadsInFlightRef: { readonly current: Set<string> };
   readonly queuedRunEdit: ReturnType<typeof useQueuedRunEdit>;
   readonly isRevertingCheckpoint: boolean;
   readonly threadDetailLoading: boolean;
@@ -271,9 +265,6 @@ interface ComposerSendInput {
     readonly track: (message: ChatMessage) => void;
     readonly release: (message: ChatMessage) => void;
   };
-  readonly setFeedbackSubmissionsByThreadKey: Dispatch<
-    SetStateAction<Record<string, ReadonlyArray<CodexFeedbackSubmission>>>
-  >;
   readonly setThreadError: ReturnType<typeof makeThreadErrorSetter>;
   readonly setKeepFullHistory: (threadKey: string, keep: boolean) => void;
   readonly anchorNewTurn: TimelineFollow["anchorNewTurn"];
@@ -297,8 +288,7 @@ interface ComposerSendInput {
 /**
  * Everything the composer's send button can start: a turn on this thread or a new one,
  * a multiple-model start, a queued or steering message, a plan follow-up or implementation
- * thread, a feedback upload, and resuming an interrupted run. Each path restores the draft
- * when it fails.
+ * thread, and resuming an interrupted run. Each path restores the draft when it fails.
  */
 export function useComposerSend(input: ComposerSendInput) {
   const {
@@ -331,7 +321,6 @@ export function useComposerSend(input: ComposerSendInput) {
     composerImagesRef,
     composerFilesRef,
     composerTerminalContextsRef,
-    feedbackUploadsInFlightRef,
     queuedRunEdit,
     isRevertingCheckpoint,
     threadDetailLoading,
@@ -365,7 +354,6 @@ export function useComposerSend(input: ComposerSendInput) {
     setSetupQueueSendThreadKey,
     setOptimisticUserMessages,
     optimisticBlobPreviews,
-    setFeedbackSubmissionsByThreadKey,
     setThreadError,
     setKeepFullHistory,
     anchorNewTurn,
@@ -381,9 +369,6 @@ export function useComposerSend(input: ComposerSendInput) {
   const navigate = useNavigate();
   const clientSettingsHydrated = useClientSettingsHydrated();
   const startThreadTurn = useOrchestrationCommand(threadEnvironment.startTurn, {
-    reportFailure: false,
-  });
-  const uploadThreadFeedback = useOrchestrationCommand(threadEnvironment.uploadFeedback, {
     reportFailure: false,
   });
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
@@ -490,8 +475,7 @@ export function useComposerSend(input: ComposerSendInput) {
       isRevertingCheckpoint ||
       !clientSettingsHydrated ||
       threadDetailLoading ||
-      readPendingEnvironmentChange() !== null ||
-      feedbackUploadsInFlightRef.current.has(routeThreadKey)
+      readPendingEnvironmentChange() !== null
     ) {
       notifyDirectAnnotationAttached();
       return;
@@ -875,68 +859,6 @@ export function useComposerSend(input: ComposerSendInput) {
         composerThreadContexts.length +
         composerEnvironmentContexts.length,
     });
-    const feedbackCommand =
-      ctxSelectedProvider === "codex" &&
-      composerImages.length === 0 &&
-      composerFiles.length === 0 &&
-      sendableComposerTerminalContexts.length === 0 &&
-      composerPreviewAnnotations.length === 0 &&
-      composerReviewComments.length === 0 &&
-      composerThreadContexts.length === 0 &&
-      composerEnvironmentContexts.length === 0
-        ? parseCodexFeedbackCommand(trimmed)
-        : null;
-    if (feedbackCommand && multipleModelSelections === null) {
-      if (!isServerThread || activeThread.activeProviderThreadId === null) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "warning",
-            title: m(msg("Start a Codex thread first")),
-            description: m(msg("Send a message before you submit feedback.")),
-          }),
-        );
-        return;
-      }
-      feedbackUploadsInFlightRef.current.add(routeThreadKey);
-      await submitCodexFeedback(
-        {
-          submission: {
-            id: newMessageId(),
-            command: trimmed,
-            createdAt: new Date().toISOString(),
-          },
-          clearDraft: () => {
-            clearComposerDraftContent(composerDraftTarget);
-            if (currentRouteThreadKeyRef.current === routeThreadKey) {
-              promptRef.current = "";
-              composerRef.current?.resetCursorState();
-            }
-          },
-          onUpdate: (submission) => {
-            setFeedbackSubmissionsByThreadKey((current) => {
-              const existing = current[routeThreadKey] ?? [];
-              const found = existing.some((entry) => entry.id === submission.id);
-              return {
-                ...current,
-                [routeThreadKey]: found
-                  ? existing.map((entry) => (entry.id === submission.id ? submission : entry))
-                  : [...existing, submission],
-              };
-            });
-          },
-          upload: () =>
-            uploadThreadFeedback({
-              environmentId: activeThread.environmentId,
-              input: { threadId: activeThread.id, ...feedbackCommand },
-            }),
-        },
-        m,
-      ).finally(() => {
-        feedbackUploadsInFlightRef.current.delete(routeThreadKey);
-      });
-
-      return;
-    }
     const composerHoldsOnlyText =
       composerImages.length === 0 &&
       composerFiles.length === 0 &&

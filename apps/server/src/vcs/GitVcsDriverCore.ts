@@ -39,12 +39,10 @@ import {
 } from "@t3tools/contracts";
 import { dedupeRemoteBranchesWithLocalMatches } from "@t3tools/shared/git";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { resolveSpawnCommand, runsGitWithoutConsole } from "@t3tools/shared/shell";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { resolveProjectFileBackedSetting } from "@t3tools/shared/projectSettings";
-import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { removeEmptyDirectory, type RemoveEmptyDirectoryError } from "./removeEmptyDirectory.ts";
 import { VcsAutomaticFetchInterval } from "./VcsAutomaticFetchInterval.ts";
@@ -727,25 +725,6 @@ interface Trace2Monitor {
   readonly flush: Effect.Effect<void, never>;
 }
 
-const nowUnixNano = DateTime.now.pipe(
-  Effect.map((now) => BigInt(DateTime.toEpochMillis(now)) * 1_000_000n),
-);
-
-const addCurrentSpanEvent =
-  /* This helper annotates the existing operation span. */
-  Effect.fnUntraced(
-    function* (name: string, attributes: Record<string, unknown>) {
-      const span = yield* Effect.currentSpan;
-      const timestamp = yield* nowUnixNano;
-      yield* Effect.sync(() => {
-        span.event(name, timestamp, compactTraceAttributes(attributes));
-      });
-    },
-    Effect.catchTags({
-      NoSuchElementError: () => Effect.void,
-    }),
-  );
-
 // Nested Git processes share the trace file but reuse child IDs in their own sessions.
 function trace2ChildKey(record: Record<string, unknown>): string | null {
   const childId = record.child_id;
@@ -820,9 +799,6 @@ const createTrace2Monitor = Effect.fnUntraced(function* (
       }
       const now = yield* DateTime.now;
       hookStartByChildKey.set(childKey, { hookName, startedAtMs: DateTime.toEpochMillis(now) });
-      yield* addCurrentSpanEvent("git.hook.started", {
-        hookName,
-      });
       if (progress.onHookStarted) {
         yield* progress.onHookStarted(hookName);
       }
@@ -835,11 +811,6 @@ const createTrace2Monitor = Effect.fnUntraced(function* (
       const exitCode = typeof code === "number" && Number.isInteger(code) ? code : null;
       const now = yield* DateTime.now;
       const durationMs = Math.max(0, DateTime.toEpochMillis(now) - started.startedAtMs);
-      yield* addCurrentSpanEvent("git.hook.finished", {
-        hookName: started.hookName,
-        exitCode,
-        durationMs,
-      });
       if (progress.onHookFinished) {
         yield* progress.onHookFinished({
           hookName: started.hookName,
@@ -1225,13 +1196,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const execute: GitVcsDriver.GitVcsDriver["Service"]["execute"] = (input) =>
     executeRaw(input).pipe(
-      withMetrics({
-        counter: gitCommandsTotal,
-        timer: gitCommandDuration,
-        attributes: {
-          operation: input.operation,
-        },
-      }),
       (execution) =>
         input.timeoutMs === null || (input.timeoutMs ?? DEFAULT_TIMEOUT_MS) > DEFAULT_TIMEOUT_MS
           ? execution

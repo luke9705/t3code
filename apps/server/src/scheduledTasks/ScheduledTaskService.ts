@@ -38,8 +38,6 @@ import * as Effect from "effect/Effect";
 import { splitsSurrogatePair } from "@t3tools/shared/assistantCitations";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Exit from "effect/Exit";
-import * as Duration from "effect/Duration";
-import * as Metric from "effect/Metric";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -52,7 +50,6 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
-import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { OrchestratorDispatchError } from "../orchestration-v2/Orchestrator.ts";
 import { userFacingDispatchErrorMessage } from "../orchestration-v2/UserFacingErrors.ts";
@@ -2084,10 +2081,7 @@ export const layer = Layer.effect(
       prompt: string,
     ) {
       const runOutcome = (outcome: "started" | "skipped" | "failed") =>
-        Effect.all([
-          Effect.annotateCurrentSpan({ "scheduled_task.webhook.run_outcome": outcome }),
-          Metrics.increment(Metrics.webhookRunsTotal, { outcome }),
-        ]);
+        Effect.annotateCurrentSpan({ "scheduled_task.webhook.run_outcome": outcome });
       const dispatched = yield* Ref.make(false);
       return yield* runTask(task, "webhook", { deliveryId, prompt, dispatched }).pipe(
         Effect.flatMap(({ dispatchFailed }) =>
@@ -2152,14 +2146,12 @@ export const layer = Layer.effect(
         "scheduled_task.webhook.outcome": outcome,
         "scheduled_task.webhook.source": source,
       });
-      yield* Metrics.increment(Metrics.webhookDeliveriesTotal, { outcome, source });
       if (request.receivedAt !== undefined && receivedAt !== undefined && now !== undefined) {
         const heldMs = Math.max(
           0,
           DateTime.toEpochMillis(now) - DateTime.toEpochMillis(receivedAt),
         );
         yield* Effect.annotateCurrentSpan({ "scheduled_task.webhook.held_ms": heldMs });
-        yield* Metric.update(Metrics.webhookHeldDelay, Duration.millis(heldMs));
       }
     });
 
@@ -2168,7 +2160,6 @@ export const layer = Layer.effect(
         // Accepted deliveries may have queued a coalescing window.
         Effect.ensuring(pendingWebhooks.invalidate),
         Effect.tapError(() => observeDelivery(request, "error", undefined, undefined)),
-        Metrics.withMetrics({ timer: Metrics.webhookDeliveryDuration }),
         Effect.withSpan("ScheduledTaskService.triggerWebhook", {
           attributes: {
             "scheduled_task.webhook.method": request.method,

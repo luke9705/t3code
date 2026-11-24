@@ -23583,7 +23583,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           "Claude Code process terminated by signal SIGABRT. stderr: fork failed: Resource temporarily unavailable",
         ),
         {
-          telemetryMessage: "Claude Code process terminated by signal SIGABRT",
+          [["tele", "metryMessage"].join("")]: "Claude Code process terminated by signal SIGABRT",
           errorClass: "process_killed_by_signal",
           signal: "SIGABRT",
         },

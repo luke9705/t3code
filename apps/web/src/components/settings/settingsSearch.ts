@@ -991,21 +991,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "privacy-policy",
     title: msg("Privacy policy"),
     to: "/settings/about",
-    searchTerms: [msg("telemetry analytics usage data tracking legal opt out")],
-  },
-  {
-    id: "telemetry-export",
-    title: msg("OpenTelemetry export"),
-    to: "/settings/diagnostics",
-    targetId: "telemetry-export",
-    scope: "environment",
-    searchTerms: [msg("OTel OTLP telemetry export endpoints logs traces metrics Grafana")],
+    searchTerms: [msg("usage data tracking legal opt out")],
   },
   {
     id: "diagnostics",
     title: msg("Diagnostics"),
     to: "/settings/maintenance",
-    searchTerms: [msg("logs traces processes resource history failures spans cpu memory")],
+    searchTerms: [msg("logs processes resource history failures cpu memory")],
   },
   {
     id: "agent-feedback",

@@ -17,11 +17,9 @@ import * as HttpMiddleware from "effect/http/HttpMiddleware";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
-import * as HttpTraceContext from "effect/http/HttpTraceContext";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiError from "effect/http-api/HttpApiError";
 import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
-import * as HttpObservability from "@t3tools/shared/httpObservability";
 
 import {
   RelayApi,
@@ -79,7 +77,6 @@ import * as ManagedEndpointAllocations from "../environments/ManagedEndpointAllo
 import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublishSignatures.ts";
 import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import * as T3ChatAccounts from "../t3chat/T3ChatAccounts.ts";
-import { withSpanAttributes } from "../observability.ts";
 import { isRelayHookPath, redactRelayHookUrl } from "../hooks/HookForwarder.ts";
 import * as RelayDb from "../db.ts";
 
@@ -117,24 +114,10 @@ const appendRelayDpopChallengeHeader = HttpEffect.appendPreResponseHandler((_req
   ),
 );
 
-const appendRelayTraceContextResponseHeader = Effect.gen(function* () {
-  const span = yield* Effect.currentParentSpan;
-  if (span._tag !== "Span") {
-    return;
-  }
-  const traceparent = HttpTraceContext.toHeaders(span).traceparent;
-  if (traceparent === undefined) {
-    return;
-  }
-  yield* HttpEffect.appendPreResponseHandler((_request, response) =>
-    Effect.succeed(HttpServerResponse.setHeader(response, "traceparent", traceparent)),
-  );
-}).pipe(Effect.ignore);
-
 const relayCorsMiddleware = HttpMiddleware.cors({
   allowedMethods: ["GET", "POST", "DELETE", "OPTIONS"],
-  allowedHeaders: ["authorization", "b3", "traceparent", "content-type", "dpop"],
-  exposedHeaders: ["traceparent", "www-authenticate"],
+  allowedHeaders: ["authorization", "content-type", "dpop"],
+  exposedHeaders: ["www-authenticate"],
   maxAge: 86_400,
 });
 
@@ -192,9 +175,6 @@ const relayRequestDeadline = <E, R>(
             "http.url": request.url,
             "relay.request.deadline_ms": deadlineMs,
           });
-          yield* Effect.annotateCurrentSpan({
-            "relay.request.deadline_exceeded": true,
-          });
           return HttpServerResponse.jsonUnsafe(
             { error: "relay_request_deadline_exceeded" },
             { status: 504 },
@@ -205,108 +185,24 @@ const relayRequestDeadline = <E, R>(
     ),
   );
 
-const SENDER_TRACE_HEADER = /^(traceparent|tracestate|b3|x-b3-.*)$/i;
-
-// Where the request entered Cloudflare's network. The Worker runs near its
-// database, not at this edge, so these are the only way to split relay
-// latency by where users are.
-const annotateRelayEdgeLocation = Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest;
-  const cf: unknown = request.source instanceof Request ? Reflect.get(request.source, "cf") : null;
-  if (typeof cf !== "object" || cf === null) return;
-  const attributes: Record<string, string> = {};
-  for (const key of ["colo", "country", "continent"] as const) {
-    const value: unknown = Reflect.get(cf, key);
-    if (typeof value === "string" && value) attributes[`relay.edge.${key}`] = value;
-  }
-  yield* Effect.annotateCurrentSpan(attributes);
-});
-
-// The method-named server span is created below; this wrapper must not add another span.
-const traceRelayHttpRequest = Effect.fnUntraced(function* <E, R>(
+// Hook URLs carry a secret token: the deadline log sees a redacted request,
+// while the route itself still receives the original.
+export const withRelayRequestDeadline = <E, R>(
   httpEffect: Effect.Effect<
     HttpServerResponse.HttpServerResponse,
     E,
     HttpServerRequest.HttpServerRequest | R
   >,
-) {
-  const request = yield* HttpServerRequest.HttpServerRequest;
-  const traced = annotateRelayEdgeLocation.pipe(
-    Effect.andThen(appendRelayTraceContextResponseHeader),
-    Effect.andThen(relayRequestDeadline(httpEffect)),
-  );
-  if (!isRelayHookPath(request.url)) {
-    return yield* HttpMiddleware.tracer(traced).pipe(
-      Effect.provideService(HttpMiddleware.TracerDisabledWhen, () => false),
-      // HttpMiddleware finalizes its span on the dispatcher; do not close a request-scoped exporter first.
-      Effect.ensuring(Effect.yieldNow),
-    );
-  }
-  // Hook URLs carry a secret token: the tracer and deadline log see a redacted
-  // request, while the route itself still receives the original. A webhook
-  // sender's trace context is dropped, so it cannot pick the trace our relay
-  // and environment spans land in.
-  const redacted = request.modify({
-    url: redactRelayHookUrl(request.url),
-    headers: Headers.removeMany(
-      request.headers,
-      Object.keys(request.headers).filter((name) => SENDER_TRACE_HEADER.test(name)),
-    ),
-  });
-  return yield* HttpMiddleware.tracer(
-    annotateRelayEdgeLocation.pipe(
-      Effect.andThen(appendRelayTraceContextResponseHeader),
-      Effect.andThen(
-        relayRequestDeadline(
-          httpEffect.pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request)),
-          RELAY_HOOK_REQUEST_DEADLINE_MS,
-        ),
-      ),
-    ),
-  ).pipe(
-    Effect.provideService(HttpServerRequest.HttpServerRequest, redacted),
-    Effect.provideService(HttpMiddleware.TracerDisabledWhen, () => false),
-    Effect.ensuring(Effect.yieldNow),
-  );
-});
-
-const layerWebhookHeaderRedaction = Layer.effect(
-  Headers.CurrentRedactedNames,
-  Effect.map(Headers.CurrentRedactedNames, (names) => [
-    ...names,
-    /signature/i,
-    /token/i,
-    /secret/i,
-    /key/i,
-    /auth/i,
-  ]),
-);
-
-export const traceRelayHttpRequestWith = <E, R, LayerError, LayerRequirements>(
-  httpEffect: Effect.Effect<
-    HttpServerResponse.HttpServerResponse,
-    E,
-    HttpServerRequest.HttpServerRequest | R
-  >,
-  tracerLayer: Layer.Layer<never, LayerError, LayerRequirements>,
-) =>
-  traceRelayHttpRequest(httpEffect).pipe(
-    Effect.provide(
-      Layer.merge(
-        tracerLayer,
-        layerWebhookHeaderRedaction.pipe(Layer.provide(HttpObservability.layer)),
-      ),
-    ),
-  );
-
-export const withoutCapturedParentSpan = <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> =>
-  Effect.withFiber((fiber) => {
-    const context = fiber.context;
-    // HttpApiBuilder captures its build context for route handlers; an event parent would outlive export.
-    fiber.setContext(Context.omit(Tracer.ParentSpan)(context));
-    return effect.pipe(Effect.ensuring(Effect.sync(() => fiber.setContext(context))));
+): Effect.Effect<HttpServerResponse.HttpServerResponse, E, HttpServerRequest.HttpServerRequest | R> =>
+  Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) => {
+    if (!isRelayHookPath(request.url)) {
+      return relayRequestDeadline(httpEffect);
+    }
+    const redacted = request.modify({ url: redactRelayHookUrl(request.url) });
+    return relayRequestDeadline(
+      httpEffect.pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request)),
+      RELAY_HOOK_REQUEST_DEADLINE_MS,
+    ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, redacted));
   });
 
 export const layerClientAuth = Layer.effect(
@@ -317,27 +213,13 @@ export const layerClientAuth = Layer.effect(
       clientBearer: Effect.fn("relay.auth.client.bearer")(function* (httpEffect, { credential }) {
         const token = readHttpAuthorizationCredential(credential);
         const verified = yield* verifyRelayClientBearerToken(config, token).pipe(
-          Effect.tapError((error) =>
-            Effect.annotateCurrentSpan(
-              "relay.auth.clerk_verification_failure",
-              clerkVerificationFailureReason(error.cause),
-            ),
-          ),
           Effect.catch(() => relayAuthInvalidError("invalid_bearer")),
         );
         if (!verified.sub) {
-          yield* Effect.annotateCurrentSpan({
-            "relay.auth.clerk_verification_failure": "missing_subject",
-          });
           return yield* relayAuthInvalidError("invalid_bearer");
         }
-        yield* Effect.annotateCurrentSpan({
-          "relay.auth.mode": verified.mode,
-          "relay.auth.subject": verified.sub,
-        });
 
         return yield* httpEffect.pipe(
-          withSpanAttributes({ "user.id": verified.sub }),
           Effect.provideService(RelayClientPrincipal, {
             userId: verified.sub,
             token,
@@ -367,13 +249,7 @@ export const layerEnvironmentAuth = Layer.effect(
         if (principal._tag === "None") {
           return yield* relayAuthInvalidError("not_authorized");
         }
-        yield* Effect.annotateCurrentSpan({
-          "relay.auth.mode": "environment_credential",
-        });
         return yield* httpEffect.pipe(
-          withSpanAttributes({
-            "relay.environment_id": principal.value.environmentId,
-          }),
           Effect.provideService(RelayEnvironmentPrincipal, principal.value),
         );
       }),
@@ -397,12 +273,7 @@ export const layerDpopClientAuth = Layer.effect(
         if (!verified) {
           return yield* relayAuthInvalidError("invalid_bearer");
         }
-        yield* Effect.annotateCurrentSpan({
-          "relay.auth.mode": "dpop",
-          "relay.auth.subject": verified.sub,
-        });
         return yield* httpEffect.pipe(
-          withSpanAttributes({ "user.id": verified.sub }),
           Effect.provideService(RelayClientPrincipal, {
             userId: verified.sub,
             token,
@@ -1049,11 +920,6 @@ export const layerTokenApi = HttpApiBuilder.group(
           clientId: args.payload.client_id,
           scope: args.payload.scope,
         });
-        yield* Effect.annotateCurrentSpan({
-          "relay.auth.mode": "clerk_bearer_token_exchange",
-          "relay.oauth.client_id": args.payload.client_id,
-          "relay.oauth.scopes": args.payload.scope,
-        });
         if (args.payload.resource !== issuer || requestedScopes === null) {
           return yield* new HttpApiError.Unauthorized({});
         }
@@ -1551,9 +1417,6 @@ function mapRelayCommonApiErrors(authReason: RelayAuthInvalidReason) {
   const mapError = Effect.fnUntraced(function* <E>(error: E) {
     const traceId = yield* currentTraceId;
     if (isDpopProofRejected(error)) {
-      yield* Effect.annotateCurrentSpan({
-        "relay.dpop.failure_code": error.code,
-      });
       return yield* Effect.fail(
         new RelayAuthInvalidError({
           code: "auth_invalid",
@@ -1566,11 +1429,6 @@ function mapRelayCommonApiErrors(authReason: RelayAuthInvalidReason) {
       );
     }
     if (isHttpUnauthorized(error)) {
-      if (authReason === "invalid_dpop") {
-        yield* Effect.annotateCurrentSpan({
-          "relay.dpop.failure_code": "invalid_proof",
-        });
-      }
       return yield* Effect.fail(
         new RelayAuthInvalidError({
           code: "auth_invalid",
@@ -1659,30 +1517,6 @@ function resolveConnectClientKeyThumbprint(payload: RelayEnvironmentConnectReque
   return requestedThumbprint;
 }
 
-function safeAuthFailureReason(value: string): string {
-  return /^[a-z0-9._-]+$/i.test(value) ? value : "unknown";
-}
-
-function clerkVerificationFailureReason(cause: unknown): string {
-  if (
-    cause instanceof Error &&
-    (cause.message.startsWith("Invalid JWT audience claim ") ||
-      cause.message.startsWith("Invalid JWT audience claim array "))
-  ) {
-    return "audience_mismatch";
-  }
-  if (typeof cause === "object" && cause !== null && "reason" in cause) {
-    const reason = (cause as { readonly reason?: unknown }).reason;
-    if (typeof reason === "string" && reason.length > 0) {
-      return safeAuthFailureReason(reason);
-    }
-  }
-  if (cause instanceof Error && cause.name) {
-    return safeAuthFailureReason(cause.name);
-  }
-  return "unknown";
-}
-
 function hasExpectedClerkAudience(audience: unknown, expectedAudience: string): boolean {
   return typeof audience === "string"
     ? audience === expectedAudience
@@ -1755,7 +1589,6 @@ export function verifyRelayClientBearerToken(
 const requireDpopPrincipalScope = Effect.fn("relay.api.require_dpop_principal_scope")(function* (
   scope: RelayDpopAccessTokenScope,
 ) {
-  yield* Effect.annotateCurrentSpan({ "relay.dpop.required_scope": scope });
   const principal = yield* RelayClientPrincipal;
   if (!principal.proofKeyThumbprint || !principal.dpopScopes?.includes(scope)) {
     return yield* new HttpApiError.Unauthorized({});
@@ -1807,10 +1640,5 @@ const requireDpopProof = Effect.fn("relay.api.require_dpop_proof")(function* (op
 
 const relayAuthInvalidError = Effect.fnUntraced(function* (reason: RelayAuthInvalidReason) {
   const traceId = yield* currentTraceId;
-  yield* Effect.annotateCurrentSpan({
-    "relay.trace_id": traceId,
-    "relay.error.outbound_tag": "RelayAuthInvalidError",
-    "relay.error.outbound_reason": reason,
-  });
   return yield* new RelayAuthInvalidError({ code: "auth_invalid", reason, traceId });
 });

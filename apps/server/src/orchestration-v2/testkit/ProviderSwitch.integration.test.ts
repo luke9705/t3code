@@ -583,7 +583,7 @@ describe("orchestration v2 provider switching", () => {
     "screenshot-exhausted-target-subagent-native",
     "prior-images-reasoning-change-replacement-small-native",
     "imported-prior-images-fallback",
-    "prior-images-telemetry-native",
+    "prior-images-workflow-native",
     "prior-images-unsent-native",
     "prior-images-legacy-replacement-native",
     "delivery-write-failure",
@@ -860,7 +860,7 @@ describe("orchestration v2 provider switching", () => {
               ),
             });
           }
-          if (scenario.includes("telemetry")) {
+          if (scenario.includes("workflow")) {
             const target = (yield* orchestrator.getThreadProjection(threadId)).providerThreads.find(
               (thread) => thread.providerInstanceId === CLAUDE_MODEL_SELECTION.instanceId,
             )!;
@@ -1052,7 +1052,7 @@ describe("orchestration v2 provider switching", () => {
           const shouldFit =
             turnUsageScenario ||
             scenario.startsWith("imported") ||
-            scenario.includes("telemetry") ||
+            scenario.includes("workflow") ||
             scenario.includes("unsent") ||
             replaceNative;
           const sourceText =

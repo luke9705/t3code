@@ -1,8 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import type {
-  DesktopTelemetryRequestDesktopUpdate,
-  DesktopTelemetryCommitDesktopUpdate,
-  DesktopTelemetryCancelDesktopUpdate,
+  DesktopHostRequestDesktopUpdate,
+  DesktopHostCommitDesktopUpdate,
+  DesktopHostCancelDesktopUpdate,
   DesktopUpdateStatusReport,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
@@ -17,7 +17,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as DesktopState from "../app/DesktopState.ts";
-import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
+import * as DesktopHostMonitor from "../hostMonitor/DesktopHostMonitor.ts";
 import * as DesktopRemoteUpdates from "./DesktopRemoteUpdates.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 import { makeHarness } from "./updatesTestHarness.ts";
@@ -30,7 +30,7 @@ const settle = Effect.gen(function* () {
   }
 });
 
-const request = (requestId: string): DesktopTelemetryRequestDesktopUpdate => ({
+const request = (requestId: string): DesktopHostRequestDesktopUpdate => ({
   version: 1,
   type: "requestDesktopUpdate",
   requestId,
@@ -40,18 +40,18 @@ function runRemoteUpdatesTest(
   harness: ReturnType<typeof makeHarness>,
   body: (context: {
     readonly reports: DesktopUpdateStatusReport[];
-    readonly requests: Queue.Queue<DesktopTelemetryRequestDesktopUpdate>;
-    readonly commits: Queue.Queue<DesktopTelemetryCommitDesktopUpdate>;
-    readonly cancellations: Queue.Queue<DesktopTelemetryCancelDesktopUpdate>;
+    readonly requests: Queue.Queue<DesktopHostRequestDesktopUpdate>;
+    readonly commits: Queue.Queue<DesktopHostCommitDesktopUpdate>;
+    readonly cancellations: Queue.Queue<DesktopHostCancelDesktopUpdate>;
   }) => Effect.Effect<void, never, DesktopUpdates.DesktopUpdates | DesktopState.DesktopState>,
 ) {
   return Effect.scoped(
     Effect.gen(function* () {
-      const requests = yield* Queue.unbounded<DesktopTelemetryRequestDesktopUpdate>();
-      const commits = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
-      const cancellations = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
+      const requests = yield* Queue.unbounded<DesktopHostRequestDesktopUpdate>();
+      const commits = yield* Queue.unbounded<DesktopHostCommitDesktopUpdate>();
+      const cancellations = yield* Queue.unbounded<DesktopHostCancelDesktopUpdate>();
       const reports: DesktopUpdateStatusReport[] = [];
-      const publisher = DesktopTelemetryPublisher.DesktopTelemetryPublisher.of({
+      const publisher = DesktopHostMonitor.DesktopHostMonitor.of({
         latest: Effect.succeedNone,
         changes: Stream.empty,
         encoded: Stream.empty,
@@ -69,7 +69,7 @@ function runRemoteUpdatesTest(
       const updates = yield* DesktopUpdates.DesktopUpdates;
       yield* updates.configure;
       yield* DesktopRemoteUpdates.listen.pipe(
-        Effect.provideService(DesktopTelemetryPublisher.DesktopTelemetryPublisher, publisher),
+        Effect.provideService(DesktopHostMonitor.DesktopHostMonitor, publisher),
       );
       yield* settle;
       yield* body({ reports, requests, commits, cancellations });

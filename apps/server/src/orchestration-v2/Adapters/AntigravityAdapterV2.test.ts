@@ -714,9 +714,9 @@ describe("AntigravityAdapterV2 html_render pages", () => {
       const report = { html: `<table>${rows.join("")}</table>`, title: "Revenue", height: 240 };
       const failed = { ...report, html: "<p>Revenue</p>" };
       const errored = { ...report, html: "<p>Revenue error</p>" };
-      const telemetry = {
+      const renderDoc = {
         html: `<ul>${rows.join("").replaceAll("tr", "li")}</ul>`,
-        title: "Telemetry",
+        title: "Render",
         height: 411,
       };
       const adapter = yield* makeAntigravityAdapterV2({
@@ -842,9 +842,9 @@ describe("AntigravityAdapterV2 html_render pages", () => {
                     title: "Run mcp_t3-code_html_render",
                     kind: "other",
                     status: "in_progress",
-                    rawInput: { ...telemetry, toolSummary: "Render telemetry" },
+                    rawInput: { ...renderDoc, toolSummary: "Render" },
                   });
-                  yield* mcpSessions.recordHtmlRender(threadId, telemetry, page("agy-1.5.8"));
+                  yield* mcpSessions.recordHtmlRender(threadId, renderDoc, page("agy-1.5.8"));
                   yield* send({
                     sessionUpdate: "tool_call_update",
                     toolCallId: "agy-1.5.8",
@@ -986,7 +986,7 @@ describe("AntigravityAdapterV2 html_render pages", () => {
       assert.strictEqual(yield* mcpSessions.takeHtmlRender(threadId, report), undefined);
       assert.strictEqual(yield* mcpSessions.takeHtmlRender(threadId, failed), undefined);
       assert.strictEqual(yield* mcpSessions.takeHtmlRender(threadId, errored), undefined);
-      assert.strictEqual(yield* mcpSessions.takeHtmlRender(threadId, telemetry), undefined);
+      assert.strictEqual(yield* mcpSessions.takeHtmlRender(threadId, renderDoc), undefined);
     }).pipe(Effect.provide(layerSession)),
   );
 });
