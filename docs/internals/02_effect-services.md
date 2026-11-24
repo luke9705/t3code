@@ -30,9 +30,7 @@ message) are fine next to the service; the capability itself is the method.
 ```
 
 Handlers don't add their own spans or request metrics. Group middleware authorizes every call
-([`RpcAuthorization.ts`](../../apps/server/src/auth/RpcAuthorization.ts)), and the server's group
-also instruments it
-([`RpcInstrumentation.ts`](../../apps/server/src/observability/RpcInstrumentation.ts)). A handler
+([`RpcAuthorization.ts`](../../apps/server/src/auth/RpcAuthorization.ts)). A handler
 with per-call context, such as a thread id, adds it with `Effect.annotateCurrentSpan`.
 
 ## Shape of a service module

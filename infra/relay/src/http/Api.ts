@@ -1551,6 +1551,7 @@ function verifyClerkOAuthBearerToken(
       const client = createClerkClient({
         secretKey: Redacted.value(config.clerkSecretKey),
         publishableKey: config.clerkPublishableKey,
+        telemetry: { disabled: true },
       });
       const state = await client.authenticateRequest(
         new Request(config.relayIssuer, {

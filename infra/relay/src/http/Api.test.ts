@@ -426,6 +426,7 @@ describe("relay client authentication", () => {
       expect(createClerkClient).toHaveBeenCalledWith({
         secretKey: "clerk-secret-key",
         publishableKey: "pk_test_test",
+        telemetry: { disabled: true },
       });
     }).pipe(
       Effect.ensuring(
