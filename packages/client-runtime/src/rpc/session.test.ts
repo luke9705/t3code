@@ -146,6 +146,13 @@ const SERVER_CONFIG: ServerConfigType = {
   issues: [],
   providers: [],
   availableEditors: [],
+  observability: {
+    logsDirectoryPath: "/tmp/logs",
+    localTracingEnabled: false,
+    otlpTracesEnabled: false,
+    otlpMetricsEnabled: false,
+    otlpLogsEnabled: false,
+  },
   settings: DEFAULT_SERVER_SETTINGS,
 };
 
