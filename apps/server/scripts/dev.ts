@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 
 const serverDir = NodePath.resolve(import.meta.dirname, "..");
 const entry = "src/bin.ts";
@@ -53,6 +54,37 @@ const start = () => {
   });
 };
 
+// A dev server on a profile with live threads waits for the running turns to finish before it
+// restarts, the way a release swap does, so an edit never cuts a turn short.
+const activeRunCount = () => {
+  const baseDirIndex = process.argv.indexOf("--base-dir");
+  const baseDir =
+    baseDirIndex === -1 ? process.env.T3CODE_HOME?.trim() : process.argv[baseDirIndex + 1]?.trim();
+  if (!baseDir) return 0;
+  try {
+    const db = new NodeSqlite.DatabaseSync(NodePath.join(baseDir, "userdata", "statev2.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      return db
+        .prepare(
+          "select 1 from orchestration_v2_projection_runs where status in ('preparing','starting','running','waiting') limit 1",
+        )
+        .all().length;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return 0;
+  }
+};
+
+const waitForIdleTurns = async () => {
+  if (activeRunCount() === 0) return;
+  console.log("[dev] Waiting for the active turns to finish before restarting...");
+  while (activeRunCount() > 0) await new Promise((resolve) => setTimeout(resolve, 1000));
+};
+
 const flush = () => {
   debounce = undefined;
   const changed = [...changedPaths].find(isWrittenSinceStart);
@@ -61,7 +93,7 @@ const flush = () => {
   console.log(`[dev] Restarting '${entry}': ${NodePath.relative(serverDir, changed)} changed`);
   if (!child) return start();
   restartPending = true;
-  child.kill("SIGTERM");
+  void waitForIdleTurns().then(() => child?.kill("SIGTERM"));
 };
 
 const onChange = (path: string) => {

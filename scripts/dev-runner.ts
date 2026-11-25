@@ -293,6 +293,7 @@ interface CreateDevRunnerEnvInput {
   readonly baseEnv: NodeJS.ProcessEnv;
   readonly serverOffset: number;
   readonly webOffset: number;
+  readonly webPort: number | undefined;
   readonly t3Home: string | undefined;
   readonly browser: boolean | undefined;
   readonly autoBootstrapProjectFromCwd: boolean | undefined;
@@ -307,6 +308,7 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
   baseEnv,
   serverOffset,
   webOffset,
+  webPort: explicitWebPort,
   t3Home,
   browser,
   autoBootstrapProjectFromCwd,
@@ -316,7 +318,7 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
   devUrl,
 }: CreateDevRunnerEnvInput): Effect.fn.Return<NodeJS.ProcessEnv, never, Path.Path> {
   const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
-  const webPort = BASE_WEB_PORT + webOffset;
+  const webPort = explicitWebPort ?? BASE_WEB_PORT + webOffset;
   const configuredBaseDir = t3Home?.trim() || undefined;
   const resolvedBaseDir = yield* resolveBaseDir(configuredBaseDir);
   const isDesktopMode = mode === "dev:desktop";
@@ -351,8 +353,13 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
   if (!isDesktopMode) {
     output.T3CODE_PORT = String(serverPort);
     // An inherited HOST pins Vite's HMR socket via explicitHost in apps/web/vite.config.ts.
-    // Only desktop mode should set it.
-    delete output.HOST;
+    // Only desktop mode, or an explicit --host, should set it: Vite's "localhost" binds the
+    // first loopback Node resolves, so a client pinned to the other one needs the same host.
+    if (host !== undefined) {
+      output.HOST = host;
+    } else {
+      delete output.HOST;
+    }
     if (mode === "dev" || mode === "dev:web") {
       // Browser dev is single-origin: everything (including /ws) is proxied
       // through Vite, so the client must resolve its backend from
@@ -538,6 +545,7 @@ interface ResolveModePortOffsetsInput<R = NetService.NetService> {
   readonly startOffset: number;
   readonly hasExplicitServerPort: boolean;
   readonly hasExplicitDevUrl: boolean;
+  readonly hasExplicitWebPort: boolean;
   readonly checkPortAvailability?: PortAvailabilityCheck<R>;
 }
 
@@ -548,6 +556,7 @@ export const resolveModePortOffsets = Effect.fn("dev-runner.resolveModePortOffse
   startOffset,
   hasExplicitServerPort,
   hasExplicitDevUrl,
+  hasExplicitWebPort,
   checkPortAvailability,
 }: ResolveModePortOffsetsInput<R>): Effect.fn.Return<
   { readonly serverOffset: number; readonly webOffset: number },
@@ -558,7 +567,7 @@ export const resolveModePortOffsets = Effect.fn("dev-runner.resolveModePortOffse
     defaultCheckPortAvailability) as PortAvailabilityCheck<R>;
 
   if (mode === "dev:web") {
-    if (hasExplicitDevUrl) {
+    if (hasExplicitDevUrl || hasExplicitWebPort) {
       return { serverOffset: startOffset, webOffset: startOffset };
     }
 
@@ -588,7 +597,7 @@ export const resolveModePortOffsets = Effect.fn("dev-runner.resolveModePortOffse
   const sharedOffset = yield* findFirstAvailableOffset({
     startOffset,
     requireServerPort: !hasExplicitServerPort,
-    requireWebPort: !hasExplicitDevUrl,
+    requireWebPort: !hasExplicitDevUrl && !hasExplicitWebPort,
     checkPortAvailability: checkPort,
   });
 
@@ -723,6 +732,7 @@ interface DevRunnerCliInput {
   readonly logWebSocketEvents: boolean | undefined;
   readonly host: string | undefined;
   readonly port: number | undefined;
+  readonly webPort: number | undefined;
   readonly devUrl: URL | undefined;
   readonly dryRun: boolean;
   readonly share: boolean;
@@ -770,6 +780,7 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
     startOffset: offset,
     hasExplicitServerPort: input.port !== undefined,
     hasExplicitDevUrl: input.devUrl !== undefined,
+    hasExplicitWebPort: input.webPort !== undefined,
     checkPortAvailability: makeDefaultCheckPortAvailability(input.host),
   });
 
@@ -790,6 +801,7 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
     baseEnv: hostEnvironment,
     serverOffset,
     webOffset,
+    webPort: input.webPort,
     t3Home: resolvedT3Home,
     browser: input.browser,
     autoBootstrapProjectFromCwd: input.autoBootstrapProjectFromCwd,
@@ -816,7 +828,7 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
     return;
   }
 
-  const sharedWebPort = BASE_WEB_PORT + webOffset;
+  const sharedWebPort = input.webPort ?? BASE_WEB_PORT + webOffset;
   let built = false;
   if (input.share) {
     if (input.mode === "dev:server") {
@@ -1003,6 +1015,14 @@ const devRunnerCli = Command.make("dev-runner", {
     Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
     Flag.withDescription(
       "Server port override (forwards to T3CODE_PORT). Ambient T3CODE_PORT is ignored: agent shells inherit it from the T3 server that spawned them.",
+    ),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined),
+  ),
+  webPort: Flag.Int("web-port").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
+    Flag.withDescription(
+      "Web dev server port override. Use it to keep a fixed origin, such as the one an installed web app is pinned to.",
     ),
     Flag.optional,
     Flag.map(Option.getOrUndefined),
