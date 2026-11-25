@@ -518,7 +518,7 @@ export const layer: Layer.Layer<
             } satisfies OrchestrationV2DomainEvent;
           }),
         );
-        const written = yield* eventSink.writeIfRunCurrent({
+        yield* eventSink.writeIfRunCurrent({
           threadId: run.threadId,
           runId,
           activeAttemptId: attempt.id,

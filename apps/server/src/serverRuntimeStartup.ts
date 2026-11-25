@@ -321,18 +321,18 @@ const resolveStartupBrowserTarget = Effect.gen(function* () {
     : yield* serverAuth.issueStartupPairingUrl(baseTarget);
 });
 
-/** Prints the one-time admin pairing URL to stdout only; logger records reach trace files and collectors. */
-export const announceStartupPairingUrl = (pairingUrl: string) =>
+/** Prints the one-time admin pairing URL to stdout only; logger records stay local. */
+const announceStartupPairingUrl = (pairingUrl: string) =>
   Effect.logInfo("Authentication required. Open T3 Code using the pairing URL.").pipe(
     Effect.andThen(Console.log(`  pairingUrl: ${pairingUrl}`)),
   );
 
 // Pairing tokens belong only in announceStartupPairingUrl's stdout output.
-export const logBrowserAutoOpenUnavailable = Effect.logInfo("browser auto-open unavailable", {
+const logBrowserAutoOpenUnavailable = Effect.logInfo("browser auto-open unavailable", {
   hint: "Open the pairing URL above in your browser.",
 });
 
-export const maybeOpenBrowser = Effect.fn("serverRuntimeStartup.maybeOpenBrowser")(function* (
+const maybeOpenBrowser = Effect.fn("serverRuntimeStartup.maybeOpenBrowser")(function* (
   target: string,
 ) {
   const serverConfig = yield* ServerConfig.ServerConfig;

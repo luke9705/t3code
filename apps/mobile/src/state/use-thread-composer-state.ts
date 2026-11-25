@@ -773,9 +773,6 @@ export function useThreadComposerState(input: {
       alertModelUnavailable();
       return null;
     }
-    const provider = serverConfig?.providers.find(
-      (entry) => entry.instanceId === modelSelection.instanceId,
-    );
     if (beforeDispatch !== undefined) {
       const response = await beforeDispatch(
         text,

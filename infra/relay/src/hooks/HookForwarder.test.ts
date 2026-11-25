@@ -25,7 +25,7 @@ import * as CloudMintSigner from "../auth/CloudMintSigner.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as ManagedEndpointAllocations from "../environments/ManagedEndpointAllocations.ts";
-import { RELAY_HTTP_ROUTER_CONFIG, withRelayRequestDeadline } from "../http/Api.ts";
+import { RELAY_HTTP_ROUTER_CONFIG } from "../http/Api.ts";
 import * as RelayHttpApi from "../http/Api.ts";
 import * as HookForwarder from "./HookForwarder.ts";
 import { RELAY_HOOK_DELIVERY_TYP, verifyRelayJwt } from "@t3tools/shared/relayJwt";

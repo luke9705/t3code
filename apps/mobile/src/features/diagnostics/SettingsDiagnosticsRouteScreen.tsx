@@ -18,7 +18,6 @@ import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { SettingsSection } from "../settings/components/SettingsSection";
-import { SettingsSwitchRow } from "../settings/components/SettingsSwitchRow";
 import {
   formatStartupCrashReport,
   parseStartupCrashRecords,

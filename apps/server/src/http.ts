@@ -344,16 +344,6 @@ export const layerServerEnvironmentHttpApi = HttpApiBuilder.group(
   }),
 );
 
-const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_PATH]);
-
-// HttpRouter.serve builds routes privately; provide the server-wide TracerDisabledWhen to the served layer.
-const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)((request) => {
-  const queryIndex = request.url.indexOf("?");
-  return UNTRACED_REQUEST_PATHS.has(
-    queryIndex === -1 ? request.url : request.url.slice(0, queryIndex),
-  );
-});
-
 // Signed URLs carry their bearer token in the path; spans and request logs record it as REDACTED.
 const SIGNED_URL_ROUTE_OPTIONS = { redactedParams: ["*"] };
 

@@ -1,7 +1,6 @@
 import { createClerkClient, verifyToken } from "@clerk/backend";
 import { sql as drizzleSql } from "drizzle-orm";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -10,8 +9,6 @@ import * as Option from "effect/Option";
 import * as Record from "effect/Record";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Tracer from "effect/Tracer";
-import * as Headers from "effect/http/Headers";
 import * as HttpEffect from "effect/http/HttpEffect";
 import * as HttpMiddleware from "effect/http/HttpMiddleware";
 import * as HttpRouter from "effect/http/HttpRouter";
@@ -193,7 +190,11 @@ export const withRelayRequestDeadline = <E, R>(
     E,
     HttpServerRequest.HttpServerRequest | R
   >,
-): Effect.Effect<HttpServerResponse.HttpServerResponse, E, HttpServerRequest.HttpServerRequest | R> =>
+): Effect.Effect<
+  HttpServerResponse.HttpServerResponse,
+  E,
+  HttpServerRequest.HttpServerRequest | R
+> =>
   Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) => {
     if (!isRelayHookPath(request.url)) {
       return relayRequestDeadline(httpEffect);

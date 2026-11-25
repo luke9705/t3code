@@ -3296,15 +3296,10 @@ export default function ChatView(props: ChatViewProps) {
     clientSettingsHydrated &&
     !needsLoadBalancing &&
     !activeEnvironmentUnavailable &&
-    !activePendingUserInput &&
-    true;
+    !activePendingUserInput;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- switches the draft to local mode, then resends the waiting message once sending is idle
   useEffect(() => {
-    if (
-      !workLocallyResendReady ||
-      sendInFlightRef.current ||
-      false
-    ) {
+    if (!workLocallyResendReady || sendInFlightRef.current) {
       return;
     }
     if (sendEnvMode !== "local") {
@@ -3316,7 +3311,6 @@ export default function ChatView(props: ChatViewProps) {
     composerDraftTarget,
     resendAfterWorkLocallyStable,
     sendInFlightRef,
-    routeThreadKey,
     sendEnvMode,
     setDraftThreadContext,
     workLocallyResendReady,
@@ -3921,11 +3915,11 @@ export default function ChatView(props: ChatViewProps) {
                                       ? gt("Preparing machine")
                                       : isRevertingCheckpoint
                                         ? gt("Rewinding conversation")
-                                          : threadDetailLoading
-                                            ? gt("Messages loading")
-                                            : worktreeSetupBlocksSend
-                                              ? gt("Preparing worktree")
-                                              : projectCloneSendBlockReason
+                                        : threadDetailLoading
+                                          ? gt("Messages loading")
+                                          : worktreeSetupBlocksSend
+                                            ? gt("Preparing worktree")
+                                            : projectCloneSendBlockReason
                                 }
                                 isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
                                 bannerItems={

@@ -1069,7 +1069,6 @@ const install = Effect.fn("nativeClient.install")(function* (
     yield* command("adb", ["-s", device, "reverse", "tcp:8081", "tcp:8081"]).pipe(Effect.ignore);
 });
 
-
 /**
  * Install into an agent-device session the caller already opened (a device pool, a cloud
  * provider, or a local device). A cache miss builds here, as for a local device: the device
@@ -1287,7 +1286,6 @@ const main = Command.make(
         return yield* new NativeClientError({ message: `Unsupported Android ABI ${value}.` });
       return value;
     });
-    const task = `native-client:${platform}`;
     const operations = {
       fingerprint: fingerprint(platform),
       installedBinary: installedBinary(platform, device),
