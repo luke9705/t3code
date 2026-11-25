@@ -1,16 +1,19 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { type ComponentProps, useLayoutEffect } from "react";
+import type { ComponentProps } from "react";
 import { useIncrementalTimelineEntries } from "../../hooks/useIncrementalTimelineEntries";
 import type { TimelineEntriesInput, TimelineEntry } from "../../session-logic";
 import { useTimelineVisibleTurnItems } from "../../state/entities";
 import {
   isPiModeCommand,
-  peekRememberedThreadTimeline,
-  rememberReadyThreadTimeline,
-  resolveThreadSwitchTimeline,
+   resolveThreadSwitchTimeline,
   timelineHasEphemeralPreviewUrls,
 } from "../ChatView.logic";
 import { MessagesTimeline } from "./MessagesTimeline";
+
+function isHiddenPiModeEntry(entry: TimelineEntry): boolean {
+  return entry.kind === "message" && entry.message.role === "user" &&
+    !entry.message.attachments?.length && isPiModeCommand(entry.message.text);
+}
 
 /**
  * The timeline with the streamed text. ChatView reads the thread through its quiet
@@ -44,31 +47,24 @@ export function ThreadTimeline({
     visibleTurnItems,
   });
   const allEntries = draftEntries ?? serverEntries;
-  const entries = hidePiModeCommands
-    ? allEntries.filter(
-        (entry) =>
-          !(
-            entry.kind === "message" &&
-            entry.message.role === "user" &&
-            !entry.message.attachments?.length &&
-            isPiModeCommand(entry.message.text)
-          ),
-      )
+  const entries = hidePiModeCommands && allEntries.some(isHiddenPiModeEntry)
+    ? allEntries.filter((entry) => !isHiddenPiModeEntry(entry))
     : allEntries;
+  const cacheable = !timelineHasEphemeralPreviewUrls(entries);
   const displayedEntries = resolveThreadSwitchTimeline({
-    loading: entries.length === 0 && syncing,
+    loading: detailLoading,
     activeThreadKey,
     nextEntries: entries,
-    rememberedForActive: peekRememberedThreadTimeline<typeof entries>(activeThreadKey),
   });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- stores the committed ready timeline in the module-level cache used during thread switches
-  useLayoutEffect(() => {
-    if (detailLoading || entries.length === 0 || timelineHasEphemeralPreviewUrls(entries)) {
-      return;
-    }
-    rememberReadyThreadTimeline({ threadKey: activeThreadKey, entries });
-  }, [activeThreadKey, detailLoading, entries]);
+  const showingCachedEntries = displayedEntries !== entries;
   return (
-    <MessagesTimeline {...timelineProps} syncing={syncing} timelineEntries={displayedEntries} />
+    <MessagesTimeline
+      {...timelineProps}
+      canOperateThread={!showingCachedEntries && timelineProps.canOperateThread === true}
+      syncing={syncing}
+      timelineEntries={displayedEntries}
+      timelineCacheKey={activeThreadKey}
+      rememberTimelineRows={!syncing && cacheable && entries.length > 0}
+    />
   );
 }

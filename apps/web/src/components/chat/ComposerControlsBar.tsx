@@ -229,6 +229,11 @@ export function ComposerControlsBar(props: {
     measuredHiddenBlockCount,
   });
   const controlSize = composerControlsCollapsed ? "xs" : "sm";
+  // Already-running Pi processes can still publish the unprefixed decode rate.
+  const piFooterMetrics = props.piFooterMetrics?.replace(
+    /^(?=\d+(?:\.\d+)? tok\/s(?: · |$))/,
+    "TPS ",
+  );
   const gt = useGT();
   const m = useMessages();
   const applyThreadModelPick = useApplyThreadModelPick();
@@ -356,7 +361,7 @@ export function ComposerControlsBar(props: {
           onToggleComposition={onToggleContextInspector}
         />
       ) : null}
-      {selectedProvider === "pi" && props.piFooterMetrics && !composerControlsCollapsed ? (
+      {selectedProvider === "pi" && piFooterMetrics && !composerControlsCollapsed ? (
         <Tooltip>
           <TooltipTrigger
             render={
@@ -372,9 +377,9 @@ export function ComposerControlsBar(props: {
                 ·
               </span>
             ) : null}
-            {props.piFooterMetrics}
+            {piFooterMetrics}
           </TooltipTrigger>
-          <TooltipPopup side="top">{props.piFooterMetrics}</TooltipPopup>
+          <TooltipPopup side="top">{piFooterMetrics}</TooltipPopup>
         </Tooltip>
       ) : null}
       {composerModelPicker}

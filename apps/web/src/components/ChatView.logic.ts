@@ -1,3 +1,8 @@
+import type {
+  MessagesTimelineRowsInput,
+  StableMessagesTimelineRowsState,
+  TimelineRowsProjection,
+} from "./chat/MessagesTimeline.logic";
 import { toServerClock } from "@t3tools/client-runtime/clock";
 import { msg } from "gt-react";
 import { m, type MessageResolver } from "../i18n/messages";
@@ -345,10 +350,19 @@ export function resolveDraftHeroState(input: {
   );
 }
 
+export type PreparedThreadTimeline = {
+  identity: string;
+  locale: string;
+  input: MessagesTimelineRowsInput;
+  projection: TimelineRowsProjection;
+  stable: StableMessagesTimelineRowsState;
+};
+
 /** Remounting or initially emptying LegendList flashes the chat pane, even for cached threads. */
 export type HeldThreadTimeline<T extends readonly unknown[]> = {
   threadKey: string | null;
   entries: T;
+  prepared?: PreparedThreadTimeline;
 };
 
 const MAX_REMEMBERED_THREAD_TIMELINES = 16;
@@ -389,6 +403,10 @@ export function peekRememberedThreadTimeline<T extends readonly unknown[]>(
     return null;
   }
   return (rememberedThreadTimelines.get(threadKey)?.entries as T | undefined) ?? null;
+}
+
+export function peekPreparedThreadTimeline(threadKey: string | null): PreparedThreadTimeline | undefined {
+  return threadKey === null ? undefined : rememberedThreadTimelines.get(threadKey)?.prepared;
 }
 
 export function resetHeldThreadTimeline(): void {

@@ -144,7 +144,7 @@ import {
 } from "./timelineViewport";
 import { useThreadFindPositionReader } from "./useThreadFindPositionReader";
 import { ThreadActivityAnnouncer } from "./ThreadActivityAnnouncer";
-import { useStableHandoffRuns, useIncrementalTimelineRows, useStableRows } from "./useTimelineRows";
+import { useStableHandoffRuns, useIncrementalTimelineRows } from "./useTimelineRows";
 import { useClientSettings } from "../../hooks/useSettings";
 
 function timelineListStateFor(identity: string): {
@@ -259,6 +259,8 @@ interface MessagesTimelineProps {
 
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReadonlyArray<TimelineEntry>;
+  timelineCacheKey?: string | null;
+  rememberTimelineRows?: boolean;
   latestRun: TimelineLatestRun | null;
   usageLimitRunId?: RunId | null;
   /** The run the screen reader announcer follows; see announcedRun. */
@@ -382,6 +384,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
   awaitingRequestId = null,
   listRef,
   timelineEntries,
+  timelineCacheKey = null,
+  rememberTimelineRows = false,
   findOpen = false,
   findExpanded = false,
   findQuery = "",
@@ -752,7 +756,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const pendingApprovalRequestIds = new Set(
     pendingApprovals.filter(isVisiblePendingApproval).map((approval) => approval.requestId),
   );
-  const rawRows = useIncrementalTimelineRows(`${listIdentityKey}\0${workspaceRoot ?? ""}`, {
+  const rows = useIncrementalTimelineRows(`${listIdentityKey}\0${workspaceRoot ?? ""}`, timelineCacheKey, rememberTimelineRows, {
     timelineEntries,
     pendingApprovalRequestIds,
     latestRun,
@@ -772,7 +776,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     toolCallVisibility,
     revealedMessageId,
   });
-  const rows = useStableRows(rawRows, listIdentityKey);
   const matchedApprovalRequestIds = new Set<string>();
   for (const row of pendingApprovalRequestIds.size > 0 ? rows : []) {
     const entries =
