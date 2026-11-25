@@ -108,7 +108,7 @@ function PiContextRing({
           )}
         >
           {percent !== null && usage.maxTokens != null
-            ? `${percent.toFixed(1)}%/${formatContextWindowTokens(usage.maxTokens).replace(/m$/, "M")}`
+            ? `${percent.toFixed(1)}%/${formatContextWindowTokens(usage.maxTokens)}`
             : "?"}
         </span>
       </TooltipTrigger>
