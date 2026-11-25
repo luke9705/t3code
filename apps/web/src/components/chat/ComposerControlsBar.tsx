@@ -42,7 +42,17 @@ import { resolveComposerControlsOwnership } from "./composerControlsOwnership";
 // Model and effort share one trigger; it stays filled while its popup is open.
 const MODEL_TRIGGER_STATES = "data-popup-open:bg-accent data-popup-open:text-foreground";
 
-function PiContextRing({ usage }: { usage: NonNullable<ChatComposerProps["piContextWindow"]> }) {
+function PiContextRing({
+  usage,
+  compositionOpen,
+  compositionPanelId,
+  onToggleComposition,
+}: {
+  usage: NonNullable<ChatComposerProps["piContextWindow"]>;
+  compositionOpen: boolean;
+  compositionPanelId: string;
+  onToggleComposition: () => void;
+}) {
   const gt = useGT();
   const used = formatContextWindowTokens(usage.usedTokens);
   const percent = usage.usedPercentage;
@@ -58,12 +68,14 @@ function PiContextRing({ usage }: { usage: NonNullable<ChatComposerProps["piCont
     <Tooltip>
       <TooltipTrigger
         render={
-          <span
-            role="img"
-            tabIndex={0}
-            aria-label={label}
+          <button
+            type="button"
+            aria-expanded={compositionOpen}
+            aria-controls={compositionOpen ? compositionPanelId : undefined}
+            aria-label={gt("Context composition: {label}", { label })}
             data-pi-context-ring
-            className="inline-flex shrink-0 items-center rounded-full p-0.5 text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            onClick={onToggleComposition}
+            className="inline-flex shrink-0 cursor-pointer items-center rounded-full p-0.5 text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           />
         }
       >
@@ -81,6 +93,24 @@ function PiContextRing({ usage }: { usage: NonNullable<ChatComposerProps["piCont
             />
           ) : null}
         </svg>
+        {/* Pi's CLI footer writes context as "38.4%/200k", warning above 70% and error above 90%. */}
+        <span
+          aria-hidden="true"
+          className={cn(
+            "ms-1.5 text-xs tabular-nums",
+            percent === null
+              ? ""
+              : percent > 90
+                ? "text-destructive"
+                : percent > 70
+                  ? "text-warning"
+                  : "",
+          )}
+        >
+          {percent !== null && usage.maxTokens != null
+            ? `${percent.toFixed(1)}%/${formatContextWindowTokens(usage.maxTokens)}`
+            : "?"}
+        </span>
       </TooltipTrigger>
       <TooltipPopup side="top">{label}</TooltipPopup>
     </Tooltip>
@@ -101,6 +131,10 @@ export function ComposerControlsBar(props: {
   reportedModelSelection: ChatComposerProps["reportedModelSelection"];
   piContextWindow?: ChatComposerProps["piContextWindow"];
   piFooterMetrics?: string | undefined;
+  /** The context composition card above the composer; the ring toggles it. */
+  contextInspectorOpen: boolean;
+  contextInspectorPanelId: string;
+  onToggleContextInspector: () => void;
   promptUltrathink: PromptUltrathink;
   onPromptEdit: (edit: (prompt: string) => string) => void;
   effortDisplay: EffortDisplay;
@@ -148,6 +182,9 @@ export function ComposerControlsBar(props: {
     selectedProviderModels,
     composerModelOptions,
     reportedModelSelection,
+    contextInspectorOpen,
+    contextInspectorPanelId,
+    onToggleContextInspector,
     promptUltrathink,
     onPromptEdit,
     compatibleRuntimeMode,
@@ -315,7 +352,12 @@ export function ComposerControlsBar(props: {
   ) : (
     <>
       {selectedProvider === "pi" && props.piContextWindow ? (
-        <PiContextRing usage={props.piContextWindow} />
+        <PiContextRing
+          usage={props.piContextWindow}
+          compositionOpen={contextInspectorOpen}
+          compositionPanelId={contextInspectorPanelId}
+          onToggleComposition={onToggleContextInspector}
+        />
       ) : null}
       {selectedProvider === "pi" && props.piFooterMetrics && !composerControlsCollapsed ? (
         <Tooltip>
