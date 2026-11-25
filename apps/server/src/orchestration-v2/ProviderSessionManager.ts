@@ -491,13 +491,6 @@ export const layerWithOptions = (
             Effect.map((settings) => settings.promptSuggestionsEnabled),
             Effect.orElseSucceed(() => false),
           );
-      // Read per turn, so the feedback instruction follows the setting without a restart.
-      const agentFeedbackMode = Option.isNone(serverSettings)
-        ? Effect.succeed("off" as const)
-        : serverSettings.value.getSettings.pipe(
-            Effect.map((settings) => settings.agentFeedback.mode),
-            Effect.orElseSucceed(() => "off" as const),
-          );
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId) {
           if (Option.isNone(serverSettings)) return { browser: true, device: false };
@@ -2712,25 +2705,18 @@ export const layerWithOptions = (
               ),
               Effect.map(({ loaded }) => loaded),
             ),
-          startTurn: (input) =>
-            busyTurn(input, () =>
-              agentFeedbackMode.pipe(Effect.flatMap((agentFeedback) => runtime.startTurn({ ...input, agentFeedback }))),
-            ),
+          startTurn: (input) => busyTurn(input, () => runtime.startTurn(input)),
           ...(runtime.resumeTurn === undefined
             ? {}
             : {
                 resumeTurn: (input: ProviderAdapter.ProviderAdapterV2ResumeTurnInput) =>
-                  busyTurn(input, () =>
-                    runtime.resumeTurn!(input),
-                  ),
+                  busyTurn(input, () => runtime.resumeTurn!(input)),
               }),
           ...(runtime.compactThread === undefined
             ? {}
             : {
                 compactThread: (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
-                  busyTurn(input, () =>
-                    runtime.compactThread!(input),
-                  ),
+                  busyTurn(input, () => runtime.compactThread!(input)),
               }),
           steerTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
@@ -2758,10 +2744,7 @@ export const layerWithOptions = (
             ),
           respondToRuntimeRequest: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
-              Effect.andThen(
-                runtime
-                  .respondToRuntimeRequest(input),
-              ),
+              Effect.andThen(runtime.respondToRuntimeRequest(input)),
             ),
         };
       };

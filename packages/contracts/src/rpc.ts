@@ -450,7 +450,6 @@ import {
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
-import { AgentFeedbackAnswerInput, AgentFeedbackRequestError } from "./agentFeedback.ts";
 import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
@@ -644,7 +643,6 @@ export const WS_METHODS = {
   scheduledTasksRunNow: "scheduledTasks.runNow",
   scheduledTasksRotateWebhookToken: "scheduledTasks.rotateWebhookToken",
   secretsAnswerRequest: "secrets.answerRequest",
-  agentFeedbackAnswerRequest: "agentFeedback.answerRequest",
   guestShareCreate: "guestShare.create",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
@@ -1126,14 +1124,11 @@ const WsServerGetProcessResourceHistoryRpc = Rpc.make(WS_METHODS.serverGetProces
   error: EnvironmentAuthorizationError,
 });
 
-const WsServerGetResourceMonitorHistoryRpc = Rpc.make(
-  WS_METHODS.serverGetResourceMonitorHistory,
-  {
-    payload: ResourceMonitorHistoryInput,
-    success: ResourceMonitorHistory,
-    error: EnvironmentAuthorizationError,
-  },
-);
+const WsServerGetResourceMonitorHistoryRpc = Rpc.make(WS_METHODS.serverGetResourceMonitorHistory, {
+  payload: ResourceMonitorHistoryInput,
+  success: ResourceMonitorHistory,
+  error: EnvironmentAuthorizationError,
+});
 
 const WsServerRetryResourceMonitorRpc = Rpc.make(WS_METHODS.serverRetryResourceMonitor, {
   payload: Schema.Struct({}),
@@ -2398,11 +2393,6 @@ const WsSecretsAnswerRequestRpc = Rpc.make(WS_METHODS.secretsAnswerRequest, {
   error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
 });
 
-const WsAgentFeedbackAnswerRequestRpc = Rpc.make(WS_METHODS.agentFeedbackAnswerRequest, {
-  payload: AgentFeedbackAnswerInput,
-  error: Schema.Union([AgentFeedbackRequestError, EnvironmentAuthorizationError]),
-});
-
 const WsScheduledTasksListWebhookDeliveriesRpc = Rpc.make(
   WS_METHODS.scheduledTasksListWebhookDeliveries,
   {
@@ -2536,7 +2526,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksRunNowRpc,
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
-  WsAgentFeedbackAnswerRequestRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,

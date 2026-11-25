@@ -85,17 +85,6 @@ export class ThreadToolFailedError extends Schema.TaggedError<ThreadToolFailedEr
   }
 }
 
-/** The server answered that it has no such tool: it predates the tool, or hides it from this session. */
-class ThreadToolMissingError extends Schema.TaggedError<ThreadToolMissingError>()(
-  "ThreadToolMissingError",
-  { tool: Schema.String },
-) {
-  override readonly [Runtime.errorReported] = false;
-  override get message(): string {
-    return `This T3 Code server has no ${this.tool} tool. Update T3 Code, then retry.`;
-  }
-}
-
 export class ThreadUsageError extends Schema.TaggedError<ThreadUsageError>()("ThreadUsageError", {
   detail: Schema.String,
 }) {
@@ -143,7 +132,6 @@ const ThreadCliError = Schema.Union([
   ThreadServerNotRunningError,
   ThreadServerUnreachableError,
   ThreadToolFailedError,
-  ThreadToolMissingError,
   ThreadUsageError,
   ThreadProjectNotFoundError,
   ThreadNeedsInputError,
@@ -155,7 +143,7 @@ const isThreadCliError = Schema.is(ThreadCliError);
  * These errors are expected outcomes for a script, so they print as one line
  * on stderr instead of the runtime's logged stack trace.
  */
-export const reportThreadErrors = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+const reportThreadErrors = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.tapError((error) =>
       isThreadCliError(error) ? Console.error(error.message) : Effect.void,
@@ -164,7 +152,7 @@ export const reportThreadErrors = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 
 const decodeFailureText = Schema.decodeUnknownOption(Schema.fromJsonString(OrchestratorMcpFailure));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-export const printJson = (value: unknown) => Console.log(encodeJson(value));
+const printJson = (value: unknown) => Console.log(encodeJson(value));
 
 const ToolResult = Schema.Struct({
   isError: Schema.optional(Schema.Boolean),
@@ -248,12 +236,8 @@ export type ThreadTools = ReturnType<typeof makeThreadTools>;
  * Signs in as a short-lived MCP client of the running server, the same way an
  * outside agent does, and revokes that session when the command ends.
  */
-export const withThreadTools = Effect.fn("cli.thread.withThreadTools")(function* <A, E, R>(
-  flags: {
-    readonly baseDir: Option.Option<string>;
-    readonly json: boolean;
-    readonly clientLabel?: string;
-  },
+const withThreadTools = Effect.fn("cli.thread.withThreadTools")(function* <A, E, R>(
+  flags: { readonly baseDir: Option.Option<string>; readonly json: boolean },
   run: (tools: ThreadTools) => Effect.Effect<A, E, R>,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
@@ -268,7 +252,7 @@ export const withThreadTools = Effect.fn("cli.thread.withThreadTools")(function*
     const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const issued = yield* Effect.acquireRelease(
       environmentAuth.issueMcpClientSession({
-        label: flags.clientLabel ?? "t3 thread cli",
+        label: "t3 thread cli",
         // The CLI runs as the machine's owner. New threads still start at
         // the project's default mode, never at this ceiling by default.
         access: "full-access",
@@ -827,7 +811,7 @@ export const launchModelSelection = Effect.fn("cli.thread.launchModelSelection")
   };
 });
 
-export const jsonFlag = Flag.Boolean("json").pipe(
+const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Print JSON instead of text."),
   Flag.withDefault(false),
 );
