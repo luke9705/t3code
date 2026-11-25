@@ -332,7 +332,7 @@ function registerFooterMetrics(pi: ExtensionAPI) {
       : "~";
     const ttft = firstTokenCount ? (firstTokenSum / firstTokenCount / 1000).toFixed(1) + "s" : "~";
     const label = duration || firstTokenCount || promptDelta > 0
-      ? [duration ? (output * 1000 / duration).toFixed(1) + " tok/s" : undefined,
+      ? [duration ? "TPS " + (output * 1000 / duration).toFixed(1) + " tok/s" : undefined,
         "TTFT " + ttft, "Cache " + cache].filter(Boolean).join(" · ")
       : undefined;
     if (label !== lastStatus) {

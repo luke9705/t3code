@@ -93,7 +93,6 @@ function PiContextRing({
             />
           ) : null}
         </svg>
-        {/* Pi's CLI footer writes context as "38.4%/200k", warning above 70% and error above 90%. */}
         <span
           aria-hidden="true"
           className={cn(
@@ -107,9 +106,7 @@ function PiContextRing({
                   : "",
           )}
         >
-          {percent !== null && usage.maxTokens != null
-            ? `${percent.toFixed(1)}%/${formatContextWindowTokens(usage.maxTokens)}`
-            : "?"}
+          {usage.maxTokens != null ? `${used}/${formatContextWindowTokens(usage.maxTokens)}` : used}
         </span>
       </TooltipTrigger>
       <TooltipPopup side="top">{label}</TooltipPopup>
