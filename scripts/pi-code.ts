@@ -38,7 +38,7 @@ const profileEnv = (): NodeJS.ProcessEnv => ({
   HOME: home,
   USER: NodeOS.userInfo().username,
   LOGNAME: NodeOS.userInfo().username,
-  PATH: `${home}/.local/bin:${NodePath.dirname(node)}:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+  PATH: `${NodePath.join(repoRoot, "node_modules", ".bin")}:${home}/.local/bin:${NodePath.dirname(node)}:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
   TMPDIR: NodePath.join(home, ".pi", "tmp"),
   T3CODE_TELEMETRY_ENABLED: "false",
   PI_CODING_AGENT_SESSION_DIR: NodePath.join(profileDir, "agent", "sessions"),
