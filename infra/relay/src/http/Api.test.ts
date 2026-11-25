@@ -1453,9 +1453,7 @@ describe("relay CORS", () => {
 
         expect(response.status).toBe(500);
         expect(response.headers["access-control-allow-origin"]).toBe("*");
-        expect(response.headers["access-control-expose-headers"]).toBe(
-          "traceparent,www-authenticate",
-        );
+        expect(response.headers["access-control-expose-headers"]).toBe("www-authenticate");
       }
     }).pipe(Effect.scoped),
   );
