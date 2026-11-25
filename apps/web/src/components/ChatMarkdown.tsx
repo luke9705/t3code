@@ -206,7 +206,7 @@ import {
 import type { Element as HastElement } from "hast";
 import { matchInlineSkills } from "@t3tools/shared/inlineSkills";
 import { collectComposerModelMentions } from "@t3tools/client-runtime/composer-model-mentions";
-import { splitMarkdownBlocks } from "./chat/markdownStreamBlocks";
+import { advanceMarkdownStream, type MarkdownStreamState } from "./chat/markdownStreamBlocks";
 import { MarkdownMermaidCodeBlock } from "./chat/MarkdownMermaidCodeBlock";
 import { MarkdownTable } from "./chat/MarkdownTable";
 import { MarkdownDetails } from "./chat/MarkdownDetails";
@@ -791,7 +791,7 @@ function useChatMarkdownState(
   // Keyed by the file links found, not the text, so streamed text that adds none keeps the
   // renderer context, and every block reading it, unchanged.
   // A template literal marks the key as a string, so the compiler memoizes the maps on its value.
-  const fileLinksKey = `${fileLinkSourcesKey(text, cwd, imageBaseDir, isStreaming ? (streamingBlocks ?? splitMarkdownBlocks(text) ?? [text]) : null)}`;
+  const fileLinksKey = `${fileLinkSourcesKey(text, cwd, imageBaseDir, streamingBlocks)}`;
   const { markdownFileLinkMetaByHref, inlineCodeFileLinkMetaByText, fileLinkParentSuffixByPath } =
     resolveFileLinkSources(fileLinksKey, cwd, imageBaseDir);
   const resolveThreadPullRequest = (
@@ -2069,10 +2069,10 @@ function ChatMarkdown({
 }: ChatMarkdownProps) {
   // Streaming re-renders only the last block; offsets for task edits, and extensions that read
   // the whole message, need the whole text.
-  const streamingBlocks =
-    props.isStreaming === true && !inline && extensions === NO_EXTENSIONS && !props.onTaskListChange
-      ? (splitMarkdownBlocks(text) ?? [text])
-      : null;
+  const [stream, setStream] = useState<MarkdownStreamState | null>(null);
+  const nextStream = props.isStreaming ? advanceMarkdownStream(text, stream ?? undefined) : null;
+  if (nextStream !== stream) setStream(nextStream);
+  const streamingBlocks = nextStream ? (nextStream.blocks ?? [text]) : null;
   const { componentState, handleCopy, markdownRef, localMediaPreview, closeLocalMediaPreview } =
     useChatMarkdownState({ text, inline, ...props }, streamingBlocks);
   const Root = inline ? "span" : "div";
@@ -2085,7 +2085,10 @@ function ChatMarkdown({
     escapeHtml: !parseRawHtml,
     insights: renderInsights && text.includes("★ Insight"),
   });
-  const blocks = streamingBlocks ?? [text];
+  const blocks =
+    !inline && extensions === NO_EXTENSIONS && !props.onTaskListChange
+      ? (streamingBlocks ?? [text])
+      : [text];
 
   return (
     <Root

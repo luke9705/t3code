@@ -277,8 +277,19 @@ function registerFooterMetrics(pi: ExtensionAPI) {
   let live: { message: LiveMessage; ctx: ExtensionContext } | undefined;
   let liveTimer: ReturnType<typeof setTimeout> | undefined;
 
-  function publish(ctx: ExtensionContext, model = ctx.model, latest?: LiveMessage) {
-    if (ctx.mode !== "rpc") return;
+  let committed: {
+    sessionId: string;
+    leafId: string | null;
+    prompt: number;
+    cacheRead: number;
+    compactions: number;
+    recent: LiveMessage[];
+  } | undefined;
+
+  function committedStats(ctx: ExtensionContext) {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const leafId = ctx.sessionManager.getLeafId();
+    if (committed?.sessionId === sessionId && committed.leafId === leafId) return committed;
     let prompt = 0;
     let cacheRead = 0;
     let compactions = 0;
@@ -292,6 +303,18 @@ function registerFooterMetrics(pi: ExtensionAPI) {
         cacheRead += usage.cacheRead;
       }
     }
+    const recent = ctx.sessionManager.buildSessionProjection().messages.filter(
+      (message) => message.role === "assistant" && message.stopReason !== "error" && message.stopReason !== "aborted",
+    ).slice(-10);
+    committed = { sessionId, leafId, prompt, cacheRead, compactions, recent };
+    return committed;
+  }
+
+  function publish(ctx: ExtensionContext, model = ctx.model, latest?: LiveMessage) {
+    if (ctx.mode !== "rpc") return;
+    const snapshot = committedStats(ctx);
+    let { prompt, cacheRead } = snapshot;
+    const { compactions } = snapshot;
     if (latest) {
       prompt += latest.usage.input + latest.usage.cacheRead + latest.usage.cacheWrite;
       cacheRead += latest.usage.cacheRead;
@@ -303,10 +326,7 @@ function registerFooterMetrics(pi: ExtensionAPI) {
       baseline = { model: key, compactions, prompt, cacheRead };
     }
 
-    const recent: LiveMessage[] = ctx.sessionManager.buildSessionProjection().messages.filter(
-      (message) => message.role === "assistant" && message.stopReason !== "error" && message.stopReason !== "aborted",
-    ).slice(-10);
-    if (latest) recent.push(latest);
+    const recent = latest ? [...snapshot.recent, latest] : snapshot.recent;
     let output = 0;
     let duration = 0;
     let firstTokenSum = 0;
@@ -348,6 +368,7 @@ function registerFooterMetrics(pi: ExtensionAPI) {
   }
   pi.on("session_start", (_event, ctx) => {
     firstTokens.clear();
+    committed = undefined;
     baseline = undefined;
     lastStatus = undefined;
     stopLive();
@@ -384,8 +405,14 @@ function registerFooterMetrics(pi: ExtensionAPI) {
     stopLive();
     publish(ctx);
   });
-  pi.on("session_compact", (_event, ctx) => publish(ctx));
-  pi.on("session_tree", (_event, ctx) => publish(ctx));
+  pi.on("session_compact", (_event, ctx) => {
+    committed = undefined;
+    publish(ctx);
+  });
+  pi.on("session_tree", (_event, ctx) => {
+    committed = undefined;
+    publish(ctx);
+  });
   pi.on("model_select", ({ model }, ctx) => publish(ctx, model));
 }
 

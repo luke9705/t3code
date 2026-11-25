@@ -3701,7 +3701,7 @@ export default function ChatView(props: ChatViewProps) {
                   draftEntries={isServerThread ? null : draftTimelineEntries}
                   activeThreadKey={activeThreadKey}
                   syncing={threadSyncPhase !== null}
-                  detailLoading={threadDetailLoading}
+                  detailLoading={threadDetailLoading && threadSyncError === null}
                   citationRequest={citationRequest}
                   citationHistory={citationHistory}
                   onCiteAssistantText={citeAssistantTextStable}

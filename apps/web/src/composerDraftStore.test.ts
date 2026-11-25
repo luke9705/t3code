@@ -699,6 +699,21 @@ describe("composerDraftStore context persistence", () => {
 
   beforeEach(resetComposerDraftStore);
 
+  it("does not publish unchanged prompts, including an absent empty draft", () => {
+    const initial = useComposerDraftStore.getState();
+    initial.setPrompt(threadRef, "");
+    expect(useComposerDraftStore.getState()).toBe(initial);
+    initial.setPrompt(threadRef, "new prompt");
+    const edited = useComposerDraftStore.getState();
+    expect(edited.draftsByThreadKey[scopedThreadKey(threadRef)]?.prompt).toBe("new prompt");
+    edited.setPrompt(threadRef, "new prompt");
+    expect(useComposerDraftStore.getState()).toBe(edited);
+    edited.setPrompt(threadRef, "");
+    expect(
+      useComposerDraftStore.getState().draftsByThreadKey[scopedThreadKey(threadRef)],
+    ).toBeUndefined();
+  });
+
   it("preserves snapshots and inline positions through repeated persistence and hydration", () => {
     const terminal = {
       ...makeTerminalContext({ id: "checkout-console" }),

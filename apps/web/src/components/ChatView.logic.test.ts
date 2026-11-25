@@ -545,6 +545,21 @@ describe("resolveThreadSwitchTimeline", () => {
         nextEntries: [],
       }),
     ).toEqual(["a1", "a2"]);
+    const live = ["live"];
+    expect(
+      resolveThreadSwitchTimeline({
+        loading: true,
+        activeThreadKey: held.threadKey,
+        nextEntries: live,
+      }),
+    ).toBe(live);
+    expect(
+      resolveThreadSwitchTimeline({
+        loading: false,
+        activeThreadKey: held.threadKey,
+        nextEntries: [],
+      }),
+    ).toEqual([]);
   });
 
   it("does not paint the last-viewed thread for a destination with nothing remembered", () => {

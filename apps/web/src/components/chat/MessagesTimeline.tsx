@@ -260,6 +260,7 @@ interface MessagesTimelineProps {
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReadonlyArray<TimelineEntry>;
   timelineCacheKey?: string | null;
+  cachedPaintOnly?: boolean;
   rememberTimelineRows?: boolean;
   latestRun: TimelineLatestRun | null;
   usageLimitRunId?: RunId | null;
@@ -385,6 +386,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   listRef,
   timelineEntries,
   timelineCacheKey = null,
+  cachedPaintOnly = false,
   rememberTimelineRows = false,
   findOpen = false,
   findExpanded = false,
@@ -756,26 +758,31 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const pendingApprovalRequestIds = new Set(
     pendingApprovals.filter(isVisiblePendingApproval).map((approval) => approval.requestId),
   );
-  const rows = useIncrementalTimelineRows(`${listIdentityKey}\0${workspaceRoot ?? ""}`, timelineCacheKey, rememberTimelineRows, {
-    timelineEntries,
-    pendingApprovalRequestIds,
-    latestRun,
-    usageLimitRunId,
-    runningRunId,
-    expandedRunIds: visibleExpandedRunIds,
-    expandedAttemptIds: visibleExpandedAttemptIds,
-    expandedWorkGroupIds,
-    isWorking,
-    runlessWorkActive,
-    activeTurnStartedAt,
-    turnDiffSummaries,
-    supportsConversationRollback,
-    threadStartCheckpointAvailable,
-    availableRevertTurnCounts,
-    worktreeSetup,
-    toolCallVisibility,
-    revealedMessageId,
-  });
+  const rows = useIncrementalTimelineRows(
+    `${listIdentityKey}\0${workspaceRoot ?? ""}`,
+    timelineCacheKey,
+    rememberTimelineRows,
+    {
+      timelineEntries,
+      pendingApprovalRequestIds,
+      latestRun,
+      usageLimitRunId,
+      runningRunId,
+      expandedRunIds: visibleExpandedRunIds,
+      expandedAttemptIds: visibleExpandedAttemptIds,
+      expandedWorkGroupIds,
+      isWorking,
+      runlessWorkActive,
+      activeTurnStartedAt,
+      turnDiffSummaries,
+      supportsConversationRollback,
+      threadStartCheckpointAvailable,
+      availableRevertTurnCounts,
+      worktreeSetup,
+      toolCallVisibility,
+      revealedMessageId,
+    },
+  );
   const matchedApprovalRequestIds = new Set<string>();
   for (const row of pendingApprovalRequestIds.size > 0 ? rows : []) {
     const entries =
@@ -1406,6 +1413,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
           ref={observeLaneWidth}
           className="chat-content-lane overflow-x-clip"
           data-timeline-root="true"
+          inert={cachedPaintOnly}
         >
           <AudioPreviewUnmountContext value={onAudioUnmount}>
             <TimelineRowContent row={item} />
@@ -1414,7 +1422,12 @@ const ConversationTimeline = memo(function ConversationTimeline({
       </div>
     </TimelineRowCtx>
   );
-  const listExtraData = { identity: listIdentityKey, rowCount: rows.length, sharedState };
+  const listExtraData = {
+    identity: listIdentityKey,
+    rowCount: rows.length,
+    sharedState,
+    cachedPaintOnly,
+  };
   const timelineListFooter = (
     <TimelineListFooter
       composerInset={anchoredEndSpace ? 0 : contentInsetEndAdjustment}

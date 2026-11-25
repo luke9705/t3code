@@ -2032,25 +2032,37 @@ describe("MessagesTimeline thread find", () => {
       { rowId: "entry-r-20", offsetWithinRow: 0, scrollOffset: 0, atEnd: false },
       false,
     );
-    await using screen = await renderElement(
-      <MessagesTimeline {...base} timelineEntries={[message("Short thread")]} />,
-    );
-    await screen.rerender(
+    const destination = (cachedPaintOnly: boolean) => (
       <MessagesTimeline
         {...base}
         routeThreadKey={other}
+        timelineCacheKey={other}
         timelineEntries={replies}
+        rememberTimelineRows={!cachedPaintOnly}
+        cachedPaintOnly={cachedPaintOnly}
         liveFollowEnabled={false}
         findOpen
-      />,
+      />
     );
+    await using screen = await renderElement(destination(false));
+    await screen.rerender(
+      <MessagesTimeline {...base} timelineEntries={[message("Short thread")]} />,
+    );
+    await screen.rerender(destination(true));
     const viewport = base.listRef.current!.getScrollableNode()!;
     await vi.waitFor(() => {
       const row = screen.container.querySelector('[data-timeline-row-id="entry-r-20"]');
+      expect(row?.closest("[inert]")).not.toBeNull();
       expect(row).not.toBeNull();
       expect(
         Math.abs(row!.getBoundingClientRect().top - viewport.getBoundingClientRect().top),
       ).toBeLessThanOrEqual(2);
+    });
+    await screen.rerender(destination(false));
+    await vi.waitFor(() => {
+      const row = screen.container.querySelector('[data-timeline-row-id="entry-r-20"]');
+      expect(row).not.toBeNull();
+      expect(row?.closest("[inert]")).toBeNull();
     });
   });
   it("reveals find's match, not the remembered row, on a thread it switches to", async () => {

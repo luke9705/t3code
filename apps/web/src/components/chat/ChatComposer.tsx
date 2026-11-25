@@ -1714,13 +1714,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     contextIds: string[],
     textChanged: boolean,
     fromHistory = false,
+    selectionOnly = false,
   ) => {
-    refreshWorkspaceSnapshotOnTyping();
     const trigger = cursorAdjacentToMention
       ? null
       : detectComposerTrigger(nextPrompt, expandedCursor);
     const updateTrigger = textChanged ? setComposerTrigger : followComposerCaret;
     if (activePendingProgress?.activeQuestion && pendingUserInputs.length > 0) {
+      refreshWorkspaceSnapshotOnTyping();
       if (activePendingProgress.activeQuestion.allowCustomAnswer === false) return;
       setComposerCursor(nextCursor);
       updateTrigger(trigger);
@@ -1733,6 +1734,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       );
       return;
     }
+    if (selectionOnly && !fromHistory && promptRef.current === nextPrompt) {
+      setComposerCursor(nextCursor);
+      followComposerCaret(trigger);
+      return;
+    }
+    refreshWorkspaceSnapshotOnTyping();
     onTypingGuardDraftChange();
     promptRef.current = nextPrompt;
     setPrompt(nextPrompt);

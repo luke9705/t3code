@@ -5,14 +5,18 @@ import type { TimelineEntriesInput, TimelineEntry } from "../../session-logic";
 import { useTimelineVisibleTurnItems } from "../../state/entities";
 import {
   isPiModeCommand,
-   resolveThreadSwitchTimeline,
+  resolveThreadSwitchTimeline,
   timelineHasEphemeralPreviewUrls,
 } from "../ChatView.logic";
 import { MessagesTimeline } from "./MessagesTimeline";
 
 function isHiddenPiModeEntry(entry: TimelineEntry): boolean {
-  return entry.kind === "message" && entry.message.role === "user" &&
-    !entry.message.attachments?.length && isPiModeCommand(entry.message.text);
+  return (
+    entry.kind === "message" &&
+    entry.message.role === "user" &&
+    !entry.message.attachments?.length &&
+    isPiModeCommand(entry.message.text)
+  );
 }
 
 /**
@@ -47,9 +51,10 @@ export function ThreadTimeline({
     visibleTurnItems,
   });
   const allEntries = draftEntries ?? serverEntries;
-  const entries = hidePiModeCommands && allEntries.some(isHiddenPiModeEntry)
-    ? allEntries.filter((entry) => !isHiddenPiModeEntry(entry))
-    : allEntries;
+  const entries =
+    hidePiModeCommands && allEntries.some(isHiddenPiModeEntry)
+      ? allEntries.filter((entry) => !isHiddenPiModeEntry(entry))
+      : allEntries;
   const cacheable = !timelineHasEphemeralPreviewUrls(entries);
   const displayedEntries = resolveThreadSwitchTimeline({
     loading: detailLoading,
@@ -60,7 +65,7 @@ export function ThreadTimeline({
   return (
     <MessagesTimeline
       {...timelineProps}
-      canOperateThread={!showingCachedEntries && timelineProps.canOperateThread === true}
+      cachedPaintOnly={showingCachedEntries}
       syncing={syncing}
       timelineEntries={displayedEntries}
       timelineCacheKey={activeThreadKey}

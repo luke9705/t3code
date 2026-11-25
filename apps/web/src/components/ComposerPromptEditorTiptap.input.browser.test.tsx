@@ -321,10 +321,12 @@ it("distinguishes text edits from caret moves in change notifications", async ()
   await userEvent.keyboard("/mod ab");
   expect(onChange.mock.lastCall?.[0]).toBe("/mod ab");
   expect(onChange.mock.lastCall?.[5]).toBe(true);
+  expect(onChange.mock.lastCall?.[7]).toBe(false);
 
   await userEvent.keyboard("{ArrowLeft}");
   expect(onChange.mock.lastCall?.[0]).toBe("/mod ab");
   expect(onChange.mock.lastCall?.[5]).toBe(false);
+  expect(onChange.mock.lastCall?.[7]).toBe(true);
 });
 
 // The mocked server keybindings bind Command-Up and Command-Down to thread navigation.

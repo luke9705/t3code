@@ -1,12 +1,16 @@
 import { useLocale, useMessages } from "gt-react";
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
+import {
+  peekPreparedThreadTimeline,
+  rememberReadyThreadTimeline,
+  type PreparedThreadTimeline,
+} from "../ChatView.logic";
 import {
   computeStableMessagesTimelineRows,
   handoffRunsSignature,
   type MessagesTimelineRowsInput,
   sameRowsInput,
   deriveMessagesTimelineRowsWithState,
-  type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
 } from "./MessagesTimeline.logic";
 import { type HandoffTimelineRun } from "./V2LifecycleRow";
@@ -36,50 +40,63 @@ export function useStableHandoffRuns(
   return value;
 }
 
-/**
- * Rows derived from the previous projection of the same list, so a streamed
- * text update patches its message rows instead of deriving every row again.
- */
-export function useIncrementalTimelineRows(
+function resolvePreparedTimelineRows(
   identity: string,
+  locale: string,
   input: MessagesTimelineRowsInput,
-): MessagesTimelineRow[] {
-  // Keyed on the locale: without a GTProvider, useMessages() returns a new function every render.
-  const locale = useLocale();
-  const resolve = useMessages();
-  const [state, setState] = useState(() => ({
-    identity,
-    input,
-    locale,
-    projection: deriveMessagesTimelineRowsWithState(input, null, resolve),
-  }));
-  const reusable = state.identity === identity && state.locale === locale;
-  if (reusable && sameRowsInput(state.input, input)) {
-    return state.projection.rows;
+  resolve: Parameters<typeof deriveMessagesTimelineRowsWithState>[2],
+  previous: PreparedThreadTimeline | null,
+  remembered?: PreparedThreadTimeline,
+): PreparedThreadTimeline {
+  const reusable = previous?.identity === identity && previous.locale === locale ? previous : null;
+  if (reusable && sameRowsInput(reusable.input, input)) return reusable;
+  if (
+    remembered?.identity === identity &&
+    remembered.locale === locale &&
+    sameRowsInput(remembered.input, input)
+  ) {
+    return remembered;
   }
   const projection = deriveMessagesTimelineRowsWithState(
     input,
-    reusable ? state.projection : null,
+    reusable?.projection ?? null,
     resolve,
   );
-  setState({ identity, input, locale, projection });
-  return projection.rows;
+  return {
+    identity,
+    locale,
+    input,
+    projection,
+    stable: computeStableMessagesTimelineRows(
+      projection.rows,
+      reusable?.stable ?? { byId: new Map(), result: [] },
+    ),
+  };
 }
 
-export function useStableRows(
-  rows: MessagesTimelineRow[],
+export function useIncrementalTimelineRows(
   identity: string,
+  threadKey: string | null,
+  remember: boolean,
+  input: MessagesTimelineRowsInput,
 ): MessagesTimelineRow[] {
-  const [state, setState] = useState<{
-    readonly identity: string;
-    readonly source: MessagesTimelineRow[] | null;
-    readonly stable: StableMessagesTimelineRowsState;
-  }>({ identity, source: null, stable: { byId: new Map(), result: [] } });
-  if (state.identity === identity && state.source === rows) return state.stable.result;
-  const stable = computeStableMessagesTimelineRows(
-    rows,
-    state.identity === identity ? state.stable : { byId: new Map(), result: [] },
+  // Keyed on locale: without a GTProvider, useMessages() returns a new function every render.
+  const locale = useLocale();
+  const resolve = useMessages();
+  const [state, setState] = useState<PreparedThreadTimeline | null>(null);
+  const prepared = resolvePreparedTimelineRows(
+    identity,
+    locale,
+    input,
+    resolve,
+    state,
+    peekPreparedThreadTimeline(threadKey),
   );
-  setState({ identity, source: rows, stable });
-  return stable.result;
+  if (state !== prepared) setState(prepared);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Remember only committed ready rows, never a render that React abandons.
+  useLayoutEffect(() => {
+    if (remember)
+      rememberReadyThreadTimeline({ threadKey, entries: prepared.input.timelineEntries, prepared });
+  }, [remember, threadKey, prepared]);
+  return prepared.stable.result;
 }

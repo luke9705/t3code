@@ -31,6 +31,7 @@ type InputHook = (
 async function loadHooks(
   commands: ReadonlyArray<SkillCommand> = [],
   argv: ReadonlyArray<string> = [],
+  clock: Record<string, unknown> = {},
 ) {
   const handlers = new Map<string, unknown>();
   const source = NodeModule.stripTypeScriptTypes(
@@ -40,6 +41,7 @@ async function loadHooks(
     ),
   );
   await NodeVM.runInNewContext(`${source}\nt3McpExtension(pi)`, {
+    ...clock,
     process: { env: {}, argv },
     NodeFSP,
     NodePath,
@@ -52,6 +54,103 @@ async function loadHooks(
   });
   return handlers;
 }
+
+describe("Pi RPC footer metrics", () => {
+  it("layers live usage over one committed snapshot, then refreshes on commit and branch changes", async () => {
+    let now = 1200;
+    let timer: (() => void) | undefined;
+    const hooks = await loadHooks([], [], {
+      Date: { now: () => now },
+      setTimeout: (callback: () => void, delay: number) => {
+        assert.equal(delay, 500);
+        timer = callback;
+        return 1;
+      },
+      clearTimeout: () => {
+        timer = undefined;
+      },
+    });
+    let leaf = "resumed";
+    let scans = 0;
+    let projections = 0;
+    const resumed = {
+      role: "assistant",
+      timestamp: 0,
+      durationMs: 1000,
+      stopReason: "stop",
+      usage: { input: 100, cacheRead: 50, cacheWrite: 0, output: 20 },
+    };
+    const live = {
+      role: "assistant",
+      timestamp: 1000,
+      stopReason: "stop",
+      usage: { input: 50, cacheRead: 50, cacheWrite: 0, output: 10 },
+    };
+    const ended = { ...live, durationMs: 1000, usage: { ...live.usage, output: 30 } };
+    let messages = [resumed];
+    let compacted = false;
+    let status: string | undefined;
+    const ctx = {
+      mode: "rpc",
+      model: { provider: "fixture", id: "a" },
+      ui: {
+        setStatus: (_key: string, label: string | undefined) => {
+          status = label;
+        },
+      },
+      sessionManager: {
+        getSessionId: () => "session",
+        getLeafId: () => leaf,
+        getBranch: () => {
+          scans++;
+          const entries = messages.map((message) => ({ type: "message", message }));
+          return compacted ? [...entries, { type: "compaction" }] : entries;
+        },
+        buildSessionProjection: () => {
+          projections++;
+          return { messages: compacted ? [] : messages };
+        },
+      },
+    };
+    const emit = (name: string, event: object = {}) => {
+      (hooks.get(name) as (event: object, ctx: unknown) => void)(event, ctx);
+    };
+    emit("session_start");
+    assert.equal(status, "TPS 20.0 tok/s · TTFT ~ · Cache 33.3%");
+    leaf = "user";
+    const update = { message: live, assistantMessageEvent: { type: "text_delta", delta: "hello" } };
+    emit("message_update", update);
+    now = 1500;
+    timer?.();
+    assert.equal(status, "TPS 20.0 tok/s · TTFT 0.2s · Cache 40.0%");
+    emit("message_update", {
+      ...update,
+      message: { ...live, usage: { ...live.usage, output: 20 } },
+    });
+    now = 2000;
+    timer?.();
+    assert.equal(status, "TPS 20.0 tok/s · TTFT 0.2s · Cache 40.0%");
+    assert.deepEqual([scans, projections], [2, 2]);
+    emit("message_end", { message: ended });
+    assert.equal(status, "TPS 25.0 tok/s · TTFT 0.2s · Cache 40.0%");
+    messages = [resumed, ended];
+    leaf = "assistant";
+    emit("agent_settled");
+    assert.equal(status, "TPS 25.0 tok/s · TTFT 0.2s · Cache 40.0%");
+    ctx.model = { provider: "fixture", id: "b" };
+    emit("model_select", { model: ctx.model });
+    assert.equal(status, "TPS 25.0 tok/s · TTFT 0.2s · Cache ~");
+    compacted = true;
+    emit("session_compact");
+    assert.isUndefined(status);
+    compacted = false;
+    messages = [resumed];
+    leaf = "resumed";
+    emit("session_tree");
+    assert.equal(status, "TPS 20.0 tok/s · TTFT ~ · Cache 33.3%");
+    assert.deepEqual([scans, projections], [5, 5]);
+  });
+});
 
 describe("Pi orchestration prompt section", () => {
   it.each([

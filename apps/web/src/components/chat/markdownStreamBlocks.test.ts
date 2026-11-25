@@ -2,7 +2,11 @@ import { toHtml } from "hast-util-to-html";
 import { describe, expect, it } from "vite-plus/test";
 
 import { wordsHast } from "~/markdown/wordsHast";
-import { splitMarkdownBlocks } from "./markdownStreamBlocks";
+import {
+  advanceMarkdownStream,
+  splitMarkdownBlocks,
+  type MarkdownStreamState,
+} from "./markdownStreamBlocks";
 
 // Whitespace between top-level blocks collapses in the rendered message.
 const renderMarkdown = (source: string, math = false) =>
@@ -51,9 +55,12 @@ describe("splitMarkdownBlocks", () => {
     "```a``` is inline.\n\nprose\n\n```\none\n\ntwo\n```\n\nafter",
     "intro\n\n★ Insight ─────\nfirst\n\n```\n─────\n```\n\n- point\n─────\n\nafter\n\n`★ Insight ─────`\nsecond\n`─────`\n\nend",
   ])("renders each block as the whole text renders it, at every streamed prefix: %j", (text) => {
+    let stream: MarkdownStreamState | undefined;
     for (let end = 0; end <= text.length; end++) {
       const source = text.slice(0, end);
-      const blocks = splitMarkdownBlocks(source) ?? [source];
+      stream = advanceMarkdownStream(source, stream);
+      expect(stream.blocks).toEqual(splitMarkdownBlocks(source));
+      const blocks = stream.blocks ?? [source];
       expect(blocks.join("")).toBe(source);
       expect(blocks.map(html).join("")).toBe(html(source));
       expect(blocks.map((block) => renderMarkdown(block, true)).join("")).toBe(
@@ -66,6 +73,16 @@ describe("splitMarkdownBlocks", () => {
     expect(splitMarkdownBlocks(`## ${heading}\n\nNext paragraph.`)).toEqual([
       `## ${heading}\n\n`,
       "Next paragraph.",
+    ]);
+  });
+
+  it("renders rewrites whole and resumes splitting when they start growing again", () => {
+    const original = advanceMarkdownStream("# Old\n\n# Old\n\nTail");
+    const rewritten = advanceMarkdownStream("# New\n\nTail", original);
+    expect(rewritten.blocks).toBeNull();
+    expect(advanceMarkdownStream("# New\n\nTail!", rewritten).blocks).toEqual([
+      "# New\n\n",
+      "Tail!",
     ]);
   });
 

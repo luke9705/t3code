@@ -3313,8 +3313,12 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           });
         },
         setPrompt: (threadRef, prompt) => {
-          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
-          if (threadKey.length === 0) {
+          const state = get();
+          const threadKey = resolveComposerDraftKey(state, threadRef) ?? "";
+          if (
+            threadKey.length === 0 ||
+            (state.draftsByThreadKey[threadKey]?.prompt ?? "") === prompt
+          ) {
             return;
           }
           set((state) => {

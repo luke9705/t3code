@@ -202,10 +202,11 @@ export interface ComposerPromptEditorProps {
     expandedCursor: number,
     cursorAdjacentToMention: boolean,
     contextIds: string[],
-    /** False when only the caret or selection moved. */
+    /** Whether the serialized text changed. */
     textChanged: boolean,
     /** True when the change came from undo or redo. */
     fromHistory?: boolean,
+    selectionOnly?: boolean,
   ) => void;
   onVisibleSelectionChange?: () => void;
   onCommandKeyDown?: (key: string, event: KeyboardEvent, isTaskItem?: boolean) => boolean;
@@ -1091,12 +1092,14 @@ function ComposerPromptEditorTiptapInner(
     selectionRangeRef.current = nextSelectionRange;
     setIsEmpty(nextValue.length === 0);
     const previousSnapshot = snapshotRef.current;
+    const sameContextIds =
+      previousSnapshot.contextIds.length === contextIds.length &&
+      previousSnapshot.contextIds.every((id, index) => id === contextIds[index]);
     const snapshotChanged = !(
       previousSnapshot.value === nextValue &&
       previousSnapshot.cursor === nextCursor &&
       previousSnapshot.expandedCursor === nextExpandedCursor &&
-      previousSnapshot.contextIds.length === contextIds.length &&
-      previousSnapshot.contextIds.every((id, index) => id === contextIds[index])
+      sameContextIds
     );
     if (isApplyingControlledUpdateRef.current || transaction.getMeta(SILENT_SELECTION_META)) return;
     if (!snapshotChanged) {
@@ -1131,6 +1134,7 @@ function ComposerPromptEditorTiptapInner(
       contextIds,
       previousSnapshot.value !== nextValue,
       isHistoryTransaction(transaction),
+      !transaction.docChanged && previousSnapshot.value === nextValue && sameContextIds,
     );
   };
 
@@ -1813,6 +1817,8 @@ function ComposerPromptEditorTiptapInner(
       literalText,
       snapshotRef.current.contextIds,
       false,
+      false,
+      true,
     );
   };
 

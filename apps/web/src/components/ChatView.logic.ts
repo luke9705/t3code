@@ -1,7 +1,7 @@
 import type {
   MessagesTimelineRowsInput,
   StableMessagesTimelineRowsState,
-  TimelineRowsProjection,
+  MessagesTimelineRowsProjection,
 } from "./chat/MessagesTimeline.logic";
 import { toServerClock } from "@t3tools/client-runtime/clock";
 import { msg } from "gt-react";
@@ -354,7 +354,7 @@ export type PreparedThreadTimeline = {
   identity: string;
   locale: string;
   input: MessagesTimelineRowsInput;
-  projection: TimelineRowsProjection;
+  projection: MessagesTimelineRowsProjection;
   stable: StableMessagesTimelineRowsState;
 };
 
@@ -405,7 +405,9 @@ export function peekRememberedThreadTimeline<T extends readonly unknown[]>(
   return (rememberedThreadTimelines.get(threadKey)?.entries as T | undefined) ?? null;
 }
 
-export function peekPreparedThreadTimeline(threadKey: string | null): PreparedThreadTimeline | undefined {
+export function peekPreparedThreadTimeline(
+  threadKey: string | null,
+): PreparedThreadTimeline | undefined {
   return threadKey === null ? undefined : rememberedThreadTimelines.get(threadKey)?.prepared;
 }
 
