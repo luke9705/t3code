@@ -212,6 +212,7 @@ import { isEditableFocused } from "../lib/editableFocus";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { shortcutLabelForCommand } from "../keybindings";
 import { cn } from "~/lib/utils";
+import type { ContextCompositionPartition } from "~/lib/contextWindow";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { toastManager } from "./ui/toast";
 import { projectScriptIdFromCommand } from "~/projectScripts";
@@ -2836,7 +2837,9 @@ export default function ChatView(props: ChatViewProps) {
           ]
         : [];
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
-    const visibleStatuses = extensionStatuses.filter(({ key }) => key !== PI_FOOTER_METRICS_STATUS);
+    const visibleStatuses = extensionStatuses.filter(
+      ({ key }) => key !== PI_FOOTER_METRICS_STATUS && key !== PI_CONTEXT_COMPOSITION_STATUS,
+    );
     if (livePiMode === undefined && fallbackPiMode !== undefined) {
       visibleStatuses.unshift({
         key: "plan-mode",
@@ -3911,6 +3914,17 @@ export default function ChatView(props: ChatViewProps) {
                                       )?.text
                                     : undefined
                                 }
+                                piContextComposition={
+                                  selectedProvider === "pi" &&
+                                  activeProviderThread?.providerInstanceId ===
+                                    activeProviderInstanceId
+                                    ? parsePiContextComposition(
+                                        extensionStatuses.find(
+                                          ({ key }) => key === PI_CONTEXT_COMPOSITION_STATUS,
+                                        )?.text,
+                                      )
+                                    : null
+                                }
                                 multipleModelSelections={multipleModelSelections}
                                 supportsMultipleModels={
                                   serverConfig?.environment.capabilities
@@ -4475,6 +4489,29 @@ function NativePiProjectRefresh({
 }
 
 const PI_FOOTER_METRICS_STATUS = "t3.pi.footer-metrics";
+const PI_CONTEXT_COMPOSITION_STATUS = "pi.context-composition";
+
+/** Pi publishes its inspector partitions as `[name, tokens]` pairs; anything else is ignored. */
+function parsePiContextComposition(
+  text: string | undefined,
+): ReadonlyArray<ContextCompositionPartition> | null {
+  if (text === undefined) return null;
+  try {
+    const value: unknown = JSON.parse(text);
+    if (!Array.isArray(value)) return null;
+    const partitions = value.flatMap((entry: unknown) =>
+      Array.isArray(entry) &&
+      typeof entry[0] === "string" &&
+      typeof entry[1] === "number" &&
+      Number.isFinite(entry[1])
+        ? [{ name: entry[0], tokens: entry[1] }]
+        : [],
+    );
+    return partitions.length > 0 ? partitions : null;
+  } catch {
+    return null;
+  }
+}
 
 function PreviewSessionSync(props: { readonly threadRef: ScopedThreadRef }) {
   usePreviewSession(props.threadRef);

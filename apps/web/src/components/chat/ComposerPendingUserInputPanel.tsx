@@ -26,7 +26,16 @@ interface PendingUserInputPanelProps {
   onToggleOption: (questionId: string, optionValue: string) => void;
   onAdvance: () => void;
   onDismiss: (requestId: RuntimeRequestId) => void;
+  /** Escape on an option leaves the rows for the composer. */
+  onReturnFocus?: () => void;
 }
+
+const enabledOptionButtons = (container: HTMLElement | null): HTMLButtonElement[] =>
+  Array.from(
+    container?.querySelectorAll<HTMLButtonElement>(
+      "[data-pending-user-input-option]:not(:disabled)",
+    ) ?? [],
+  );
 
 export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserInputPanel({
   pendingUserInputs,
@@ -39,6 +48,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
   onToggleOption,
   onAdvance,
   onDismiss,
+  onReturnFocus,
 }: PendingUserInputPanelProps) {
   if (pendingUserInputs.length === 0) return null;
   const activePrompt = pendingUserInputs[0];
@@ -57,6 +67,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       onToggleOption={onToggleOption}
       onAdvance={onAdvance}
       onDismiss={onDismiss}
+      onReturnFocus={onReturnFocus}
     />
   );
 });
@@ -72,6 +83,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   onToggleOption,
   onAdvance,
   onDismiss,
+  onReturnFocus,
 }: {
   prompt: PendingUserInput;
   cwd: string | undefined;
@@ -83,8 +95,10 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   onToggleOption: (questionId: string, optionValue: string) => void;
   onAdvance: () => void;
   onDismiss: (requestId: RuntimeRequestId) => void;
+  onReturnFocus: (() => void) | undefined;
 }) {
   const gt = useGT();
+  const optionsRef = useRef<HTMLDivElement>(null);
   // Message-mode requests remain answerable after their provider turn ends.
   const canRespond = prompt.responseCapability !== "not_resumable";
   const responseDisabled = disabled || isResponding || !canRespond;
@@ -165,6 +179,25 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
           'select, [contenteditable]:not([contenteditable="false"]), [role="dialog"], [aria-modal="true"], [role="menu"], [role="combobox"], [data-slot$="popup"]',
         )
       ) {
+        return;
+      }
+      // A choice-only question leaves the composer read-only: from it (or nothing focused), the arrows and
+      // Enter move focus into the rows, and a focused row then navigates itself.
+      const fromComposer =
+        target === document.body ||
+        (target instanceof Element && target.closest('[data-testid="composer-editor"]') !== null);
+      if (
+        fromComposer &&
+        (event.key === "ArrowDown" ||
+          event.key === "ArrowUp" ||
+          event.key === "Home" ||
+          event.key === "End" ||
+          (event.key === "Enter" && activeQuestion.allowCustomAnswer === false))
+      ) {
+        const buttons = enabledOptionButtons(optionsRef.current);
+        if (buttons.length === 0) return;
+        event.preventDefault();
+        (event.key === "ArrowUp" || event.key === "End" ? buttons.at(-1) : buttons[0])?.focus();
         return;
       }
       const digit = Number.parseInt(event.key, 10);
@@ -272,7 +305,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
               className={cn("pt-0.5 text-foreground/85", questionTextAlign)}
             />
             {/* Rows span the header row's width so the radios align with the question text and the shortcut column sits under the dismiss button. */}
-            <div className="-ms-2 mt-1.5 sm:-ms-1.5">
+            <div ref={optionsRef} className="-ms-2 mt-1.5 sm:-ms-1.5">
               {activeQuestion.options.map((option, index) => {
                 const optionValue = option.value ?? option.label;
                 const isOptimisticallySelected =
@@ -283,7 +316,9 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                 const className = cn(
                   questionTextAlign,
                   "group flex w-full items-start gap-2.5 rounded-md bg-transparent py-1.5 ps-2 sm:ps-1.5 outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25",
-                  isSelected ? "text-foreground" : "text-foreground/70 hover:bg-muted/30",
+                  isSelected
+                    ? "text-foreground focus-visible:bg-muted/30"
+                    : "text-foreground/70 hover:bg-muted/30 focus-visible:bg-muted/30",
                   (disabled || isResponding) && "opacity-50 cursor-not-allowed",
                   !disabled && !isResponding && "cursor-pointer",
                 );
@@ -324,8 +359,35 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                       type="button"
                       aria-pressed={isSelected}
                       disabled={disabled || isResponding}
+                      data-pending-user-input-option
                       onClick={() => {
                         handleOptionSelection(activeQuestion.id, optionValue);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.metaKey || event.ctrlKey || event.altKey) return;
+                        const buttons = enabledOptionButtons(optionsRef.current);
+                        const current = buttons.indexOf(event.currentTarget);
+                        if (current < 0) return;
+                        const count = buttons.length;
+                        const next =
+                          event.key === "ArrowDown"
+                            ? (current + 1) % count
+                            : event.key === "ArrowUp"
+                              ? (current - 1 + count) % count
+                              : event.key === "Home"
+                                ? 0
+                                : event.key === "End"
+                                  ? count - 1
+                                  : undefined;
+                        if (next !== undefined) {
+                          event.preventDefault();
+                          buttons[next]?.focus();
+                        } else if (event.key === "Escape") {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          event.currentTarget.blur();
+                          onReturnFocus?.();
+                        }
                       }}
                       className={className}
                     >

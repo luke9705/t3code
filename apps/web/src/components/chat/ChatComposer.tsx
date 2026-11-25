@@ -226,6 +226,8 @@ import {
 import { CollapsedComposerStopAction, ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerFooterPrimaryActions } from "./ComposerFooterControls";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
+import { ComposerContextInspectorPanel } from "./ComposerContextInspectorPanel";
+import { type ContextCompositionPartition } from "~/lib/contextWindow";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
 import { getComposerPromptInjectionState, getComposerReasoningStep } from "./composerProviderState";
@@ -435,6 +437,8 @@ export interface ChatComposerProps {
   reportedModelSelection?: ModelSelection | null;
   piContextWindow?: ContextWindowSnapshot | null | undefined;
   piFooterMetrics?: string | undefined;
+  /** Pi's estimated context partitions; null until Pi has captured the context. */
+  piContextComposition?: ReadonlyArray<ContextCompositionPartition> | null | undefined;
   activeProjectId: ProjectId | null;
   projectName?: string | undefined;
 
@@ -1103,6 +1107,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
+  const [contextInspectorOpen, setContextInspectorOpen] = useState(false);
+  const contextInspectorPanelId = `${composerSuggestionListId}-context-composition`;
   const isMobileViewport = useMediaQuery("max-sm");
   const isSoftwareKeyboardOpen = useSoftwareKeyboardOpen();
   const [isComposerFocused, setIsComposerFocused] = useState(false);
@@ -1273,7 +1279,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const isChoiceOnlyPendingQuestion =
     activePendingProgress?.activeQuestion?.allowCustomAnswer === false;
-  const showComposerTopDrawer = pendingUserInputs.length > 0;
+  const showComposerTopDrawer = pendingUserInputs.length > 0 || contextInspectorOpen;
   const showCollapsedMobilePromptRow = isComposerCollapsedMobile;
   const showComposerAttachAction =
     fileStagingLimit !== null &&
@@ -2591,7 +2597,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       cancelHeldSend();
       return true;
     }
-    return composerCommandKeyHandler({
+    const handled = composerCommandKeyHandler({
       keybindings,
       getShortcutContext,
       sendShortcut: settings.sendShortcut,
@@ -2630,6 +2636,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       promptSuggestion: offeredPromptSuggestion,
       dismissPromptSuggestion,
     })(key, event, isTaskItem);
+    // A composer command such as dismissing the suggestion menu keeps precedence over the card.
+    if (!handled && key === "Escape" && contextInspectorOpen && !event.isComposing) {
+      setContextInspectorOpen(false);
+      return true;
+    }
+    return handled;
   };
 
   const {
@@ -2722,6 +2734,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       reportedModelSelection={reportedModelSelection}
       piContextWindow={props.piContextWindow}
       piFooterMetrics={props.piFooterMetrics}
+      contextInspectorOpen={contextInspectorOpen}
+      contextInspectorPanelId={contextInspectorPanelId}
+      onToggleContextInspector={() => setContextInspectorOpen((open) => !open)}
       promptUltrathink={promptUltrathink}
       onPromptEdit={editPromptFromTraitsStable}
       compatibleRuntimeMode={compatibleRuntimeMode}
@@ -3733,6 +3748,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onToggleOption={onSelectActivePendingUserInputOption}
                     onAdvance={onAdvanceActivePendingUserInput}
                     onDismiss={onDismissActivePendingUserInput}
+                    onReturnFocus={() => composerEditorRef.current?.focus()}
+                  />
+                ) : null}
+                {contextInspectorOpen ? (
+                  <ComposerContextInspectorPanel
+                    id={contextInspectorPanelId}
+                    partitions={props.piContextComposition ?? null}
+                    contextWindow={props.piContextWindow}
+                    onDismiss={() => setContextInspectorOpen(false)}
                   />
                 ) : null}
               </ComposerBanner.Root>

@@ -1,3 +1,9 @@
+/** One estimated partition of the context, as Pi's inspector computes it. */
+export interface ContextCompositionPartition {
+  readonly name: string;
+  readonly tokens: number;
+}
+
 export function formatContextWindowTokens(value: number | null): string {
   if (value === null || !Number.isFinite(value)) {
     return "0";
