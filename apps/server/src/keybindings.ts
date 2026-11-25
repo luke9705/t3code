@@ -112,6 +112,16 @@ const LATE_DEFAULT_KEYBINDINGS: ReadonlyArray<{
       when: "composerFocus && draftThreadRoute",
     },
   },
+  {
+    id: "thread.previous:ctrl+arrowup",
+    alongside: { key: "mod+shift+[", command: "thread.previous" },
+    rule: { key: "ctrl+arrowup", command: "thread.previous" },
+  },
+  {
+    id: "thread.next:ctrl+arrowdown",
+    alongside: { key: "mod+shift+]", command: "thread.next" },
+    rule: { key: "ctrl+arrowdown", command: "thread.next" },
+  },
 ];
 
 function keybindingShortcutContext(rule: KeybindingRule): string | null {
