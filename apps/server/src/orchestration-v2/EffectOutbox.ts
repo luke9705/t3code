@@ -57,6 +57,12 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     title: Schema.String,
   }),
   Schema.Struct({
+    type: Schema.Literal("provider-session.apply-pi-mode"),
+    providerSessionId: ProviderSessionId,
+    providerThreadId: ProviderThreadId,
+    piMode: Schema.Literals(["build", "plan"]),
+  }),
+  Schema.Struct({
     type: Schema.Literal("provider-turn.start"),
     runId: RunId,
   }),
@@ -157,6 +163,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
 export const PROCESS_BOUND_EFFECT_TYPES = [
   "provider-session.apply-model-selection",
   "provider-session.apply-thread-title",
+  "provider-session.apply-pi-mode",
   "provider-turn.start",
   "provider-turn.interrupt",
   "provider-turn.steer",

@@ -40,7 +40,7 @@ export type PullRequestListPreferencePatch = {
 
 const DEFAULT_PULL_REQUEST_LIST_PREFERENCES = {
   involvement: "all",
-  state: "open",
+  state: "all",
 } as const satisfies PullRequestListPreferences;
 
 const BoundedPreference = Schema.String.check(Schema.isMaxLength(200));
@@ -62,7 +62,7 @@ export const PullRequestListPreferencesSchema = Schema.Struct({
 const decodePullRequestListPreferences = Schema.decodeUnknownOption(
   PullRequestListPreferencesSchema,
 );
-const PULL_REQUEST_LIST_PREFERENCES_STORAGE_KEY = "t3.pullRequests.preferences";
+const PULL_REQUEST_LIST_PREFERENCES_STORAGE_KEY = "t3.pullRequests.accountPreferences";
 type PreferenceStorage = Pick<Storage, "getItem" | "setItem">;
 
 function resolvePreferenceStorage(

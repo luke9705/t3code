@@ -319,6 +319,10 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
           serviceTier = String(record["message"]).slice(serviceTierCommand.length).trim() || null;
           return promptDisposition ? { ...base, data: { disposition: "handled" } } : base;
         }
+        // Pi applies extension commands on receipt: handled, with no run, even mid-turn.
+        if (/^\/plan(\s|$)/.test(String(record["message"]))) {
+          return { ...base, data: { disposition: "handled" } };
+        }
         if (isCompacting) {
           return { ...base, success: false, error: PI_COMPACTING_PROMPT_ERROR };
         }
@@ -2821,6 +2825,49 @@ describe("PiAdapterV2", () => {
           `/${PI_T3_SERVICE_TIER_COMMAND}`,
         ],
       );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("applies an extension command to the live session without starting a turn", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(
+        runtime,
+        providerThread,
+        "default",
+        [],
+        "A running turn",
+        { instanceId: PI_INSTANCE_ID, model: "columbia-codex/gpt-6.1-sol" },
+        1,
+      );
+      while (String((yield* fake.takeRequest("prompt"))["message"]).startsWith("/")) {}
+      yield* fake.emit({ type: "agent_start" });
+
+      // Mid-turn: the mode switches without queuing a user message behind the run.
+      const before = fake.allRequests().length;
+      yield* runtime.applyExtensionCommand!({ providerThread, command: "/plan on" });
+      const plan = yield* fake.takeRequest("prompt");
+      assert.equal(plan["message"], "/plan on");
+      assert.isUndefined(plan["streamingBehavior"]);
+      assert.equal(fake.allRequests().length, before + 1);
+
+      // A Pi that would start a run instead of handling it is surfaced, never silently queued.
+      const wrongProviderThread = { ...providerThread, id: ProviderThreadId.make("other") };
+      yield* runtime.applyExtensionCommand!({
+        providerThread: wrongProviderThread,
+        command: "/plan off",
+      });
+      assert.equal(fake.allRequests().length, before + 1, "a stale thread sends nothing");
+
+      yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+      yield* fake.emit({ type: "agent_settled" });
+      yield* takeEvent((event) => event.type === "turn.terminal");
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

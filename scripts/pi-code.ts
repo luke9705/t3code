@@ -32,8 +32,7 @@ if (mode === undefined || !modes.includes(mode)) {
   process.exit(2);
 }
 
-// The dev runner strips the live profile's state variables; the server must
-// see the profile's Pi sessions dir the way the release process does.
+// Pi Code shares ~/.pi/agent/sessions with the Pi CLI; PI_CODING_AGENT_SESSION_DIR stays unset.
 const profileEnv = (): NodeJS.ProcessEnv => ({
   HOME: home,
   USER: NodeOS.userInfo().username,
@@ -41,7 +40,6 @@ const profileEnv = (): NodeJS.ProcessEnv => ({
   PATH: `${NodePath.join(repoRoot, "node_modules", ".bin")}:${home}/.local/bin:${NodePath.dirname(node)}:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
   TMPDIR: NodePath.join(home, ".pi", "tmp"),
   T3CODE_TELEMETRY_ENABLED: "false",
-  PI_CODING_AGENT_SESSION_DIR: NodePath.join(profileDir, "agent", "sessions"),
 });
 
 const portOwner = (port: number): number | undefined => {

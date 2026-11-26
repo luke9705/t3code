@@ -418,6 +418,7 @@ export interface PullRequestProviderApi {
     readonly cwd: string;
     readonly host: string;
     readonly repositories: ReadonlyArray<string>;
+    readonly githubAccount?: true;
     readonly state: PullRequestListState;
     readonly involvement: PullRequestInvolvement;
     readonly viewer: string;

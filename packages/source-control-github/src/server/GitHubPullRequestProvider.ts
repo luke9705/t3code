@@ -445,6 +445,7 @@ export const make = Effect.gen(function* () {
           cwd: input.cwd,
           host: input.host,
           repositories: input.repositories,
+          ...(input.githubAccount ? { githubAccount: input.githubAccount } : {}),
           state: input.state,
           involvement: input.involvement,
           viewer: input.viewer,
@@ -456,14 +457,17 @@ export const make = Effect.gen(function* () {
         .pipe(
           Effect.mapError(fail("listChangeRequestsAcross")),
           Effect.flatMap((batch) =>
-            Effect.map(unresolvedBySearch(input, batch), (unresolved) => ({
-              truncated: batch.truncated,
-              items: batch.items.map((item) => ({
-                ...item,
-                author: withAvatar(item.author, new Map<string, string>(), input.host),
-              })),
-              unresolved,
-            })),
+            Effect.map(
+              input.githubAccount ? Effect.succeed([]) : unresolvedBySearch(input, batch),
+              (unresolved) => ({
+                truncated: batch.truncated,
+                items: batch.items.map((item) => ({
+                  ...item,
+                  author: withAvatar(item.author, new Map<string, string>(), input.host),
+                })),
+                unresolved,
+              }),
+            ),
           ),
         ),
 

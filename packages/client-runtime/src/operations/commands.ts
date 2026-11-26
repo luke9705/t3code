@@ -163,6 +163,10 @@ export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
   readonly runtimeMode: RuntimeMode;
 }
 
+export interface SetThreadPiModeInput extends ThreadCommandInput {
+  readonly piMode: "build" | "plan";
+}
+
 export interface SetThreadInteractionModeInput extends ThreadCommandInput {
   readonly interactionMode: ProviderInteractionMode;
 }
@@ -762,6 +766,17 @@ export const setThreadRuntimeMode = Effect.fn("EnvironmentCommands.setThreadRunt
     });
   },
 );
+
+export const setThreadPiMode = Effect.fn("EnvironmentCommands.setThreadPiMode")(function* (
+  input: SetThreadPiModeInput,
+) {
+  return yield* dispatch({
+    type: "thread.pi-mode.set",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    piMode: input.piMode,
+  });
+});
 
 export const setThreadInteractionMode = Effect.fn("EnvironmentCommands.setThreadInteractionMode")(
   function* (input: SetThreadInteractionModeInput) {

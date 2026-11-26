@@ -547,10 +547,10 @@ it.each(["new", "existing"] as const)(
   },
 );
 
-it("a file picked after the phone composer collapses still attaches", async () => {
+it("the phone composer accepts pasted images without showing an attach button", async () => {
   const thread = threadWithHistory("thread-40993", 1);
   using _environment = installFakeEnvironment([thread]);
-  await page.viewport(390, 844);
+  await page.viewport(1400, 900);
   __setClientSettingsForTests({
     ...DEFAULT_CLIENT_SETTINGS,
     onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
@@ -564,24 +564,19 @@ it("a file picked after the phone composer collapses still attaches", async () =
     router: false,
   });
   using _uploads = acceptAttachmentUploads();
-  const editor = page.getByTestId("composer-editor");
+  await userEvent.click(page.getByText(`Thread ${thread.id}`, { exact: true }).first());
   await expect.element(page.getByText(`Answer 0 for ${thread.id}.`)).toBeVisible();
+  await page.viewport(390, 844);
+  const editor = page.getByTestId("composer-editor");
   await userEvent.click(editor);
-  await expect.element(page.getByRole("button", { name: "Attach files" })).toBeVisible();
-  const input = document.querySelector<HTMLInputElement>(
-    'form[data-chat-composer-form] input[type="file"]',
-  );
-  expect(input).not.toBeNull();
-
-  // Opening the native picker blurs the editor, which collapses the phone composer.
-  (editor.element() as HTMLElement).blur();
   await expect.element(page.getByRole("button", { name: "Attach files" })).not.toBeInTheDocument();
-  const files = new DataTransfer();
-  files.items.add(new File([PNG], "picked.png", { type: "image/png" }));
-  input!.files = files.files;
-  input!.dispatchEvent(new Event("change", { bubbles: true }));
+  const clipboardData = new DataTransfer();
+  clipboardData.items.add(new File([PNG], "pasted.png", { type: "image/png" }));
+  editor
+    .element()
+    .dispatchEvent(new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true }));
 
-  await expect.element(page.getByRole("img", { name: "picked.png" })).toBeVisible();
+  await expect.element(page.getByRole("img", { name: "pasted.png" })).toBeVisible();
 });
 
 it("opens the thread actions menu for an older settled thread the shell leaves out", async () => {

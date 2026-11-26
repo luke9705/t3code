@@ -115,6 +115,20 @@ describe("Pi RPC footer metrics", () => {
     const emit = (name: string, event: object = {}) => {
       (hooks.get(name) as (event: object, ctx: unknown) => void)(event, ctx);
     };
+    messages = [];
+    emit("session_start");
+    assert.isUndefined(status);
+    leaf = "first-token";
+    emit("message_update", {
+      message: { ...live, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 } },
+      assistantMessageEvent: { type: "text_delta", delta: "hello" },
+    });
+    timer?.();
+    assert.equal(status, "TPS ~ · TTFT 0.2s · Cache ~");
+
+    messages = [resumed];
+    leaf = "resumed";
+    scans = projections = 0;
     emit("session_start");
     assert.equal(status, "TPS 20.0 tok/s · TTFT ~ · Cache 33.3%");
     leaf = "user";

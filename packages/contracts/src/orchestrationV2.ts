@@ -2202,6 +2202,7 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.issue-synced",
       "thread.runtime-mode-updated",
       "thread.interaction-mode-updated",
+      "thread.pi-mode-updated",
       "thread.model-selection-updated",
       "thread.provider-switched",
       "thread.guest-share-updated",
@@ -3162,6 +3163,7 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
       "thread.metadata-updated",
       "thread.runtime-mode-updated",
       "thread.interaction-mode-updated",
+      "thread.pi-mode-updated",
       "thread.model-selection-updated",
       "thread.provider-switched",
       "thread.guest-share-updated",
@@ -3448,6 +3450,12 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     orderKey: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.pi-mode.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    piMode: Schema.Literals(["build", "plan"]),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.visit"),

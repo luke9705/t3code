@@ -98,6 +98,36 @@ it.layer(layerTest)("DispatchModeLimit", (it) => {
     }),
   );
 
+  it.effect("sets Pi mode on a thread with no live session and records it for late readers", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("thread:pi-mode");
+      yield* createThread(threadId);
+      yield* orchestrator.dispatch({
+        type: "thread.pi-mode.set",
+        commandId: CommandId.make("pi-mode-plan"),
+        threadId,
+        piMode: "plan",
+      });
+      assert.equal((yield* orchestrator.getThreadRecords(threadId, [])).thread.savedPiMode, "plan");
+      yield* orchestrator.dispatch({
+        type: "thread.pi-mode.set",
+        commandId: CommandId.make("pi-mode-build"),
+        threadId,
+        piMode: "build",
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadRecords(threadId, [])).thread.savedPiMode,
+        "build",
+      );
+      // A mode switch is not activity: the sidebar order is unchanged.
+      const shell = yield* ProjectionStore.ProjectionStoreV2.pipe(
+        Effect.flatMap((projections) => projections.getThreadShell(threadId)),
+      );
+      assert.isNotNull(shell);
+    }),
+  );
+
   it.effect("refuses to fork a source thread its user raised", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

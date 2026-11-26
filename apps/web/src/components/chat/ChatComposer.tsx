@@ -215,8 +215,6 @@ import {
   composerSuggestionOptionId,
 } from "./ComposerCommandMenu";
 import {
-  ComposerAttachButton,
-  ComposerAttachInput,
   ComposerAttachmentFileList,
   ComposerAttachmentMediaRow,
   ComposerFilePreviewDialog,
@@ -286,6 +284,7 @@ import type { ReviewCommentContext } from "../../reviewCommentContext";
 import { useComposerRestingTransition } from "./useComposerRestingTransition";
 import { ComposerCommandMenuLayer } from "./ComposerCommandMenuLayer";
 import { useRestingComposerControlsLayout } from "./useRestingComposerControlsLayout";
+import { ComposerControl } from "./ComposerControl";
 import { useProviderWorkspaceSnapshotRefresh } from "./useProviderWorkspaceSnapshotRefresh";
 import { useComposerProviderModel } from "./useComposerProviderModel";
 import { useComposerImageGroups } from "./useComposerImageGroups";
@@ -1131,7 +1130,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const pasteAsTextShortcutUntilRef = useRef(0);
   const composerFormRef = useRef<HTMLFormElement>(null);
-  const composerAttachInputRef = useRef<HTMLInputElement>(null);
   const composerSurfaceRef = useRef<HTMLDivElement>(null);
   const providerInputRejectedRef = useRef(false);
   const composerSelectLockRef = useRef(false);
@@ -1281,11 +1279,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activePendingProgress?.activeQuestion?.allowCustomAnswer === false;
   const showComposerTopDrawer = pendingUserInputs.length > 0 || contextInspectorOpen;
   const showCollapsedMobilePromptRow = isComposerCollapsedMobile;
-  const showComposerAttachAction =
-    fileStagingLimit !== null &&
-    (!activePendingProgress ||
-      (supportsQuestionAttachments &&
-        activePendingProgress.activeQuestion?.allowCustomAnswer !== false));
   const composerFooterHasWideActions = activePendingProgress !== null;
 
   const editPromptFromTraits = (edit: (prompt: string) => string) => {
@@ -3666,9 +3659,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onRemoveFile={removeComposerFileFromDraft}
       />
     ) : null;
-  const composerAttachButton = showComposerAttachAction ? (
-    <ComposerAttachButton onOpenPicker={() => composerAttachInputRef.current?.click()} />
-  ) : null;
+  const activePiMode = props.piMode;
+  const piModeControl =
+    activePiMode !== undefined &&
+    props.onTogglePiMode &&
+    !activePendingApproval &&
+    pendingUserInputs.length === 0 ? (
+      <ComposerControl
+        type="button"
+        onClick={() => props.onTogglePiMode?.(activePiMode === "plan" ? "/plan off" : "/plan on")}
+        aria-pressed={activePiMode === "plan"}
+        aria-label={activePiMode === "plan" ? gt("Plan mode") : gt("Build mode")}
+      >
+        {activePiMode === "plan" ? gt("Plan") : gt("Build")}
+      </ComposerControl>
+    ) : null;
   return (
     <form
       ref={composerFormRef}
@@ -3777,13 +3782,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           onToggleMenu={toggleStashMenuStable}
         />
       </ComposerBanner.Dock>
-      {showComposerAttachAction ? (
-        <ComposerAttachInput
-          ref={composerAttachInputRef}
-          addComposerAttachments={addComposerAttachments}
-          focusComposer={focusComposer}
-        />
-      ) : null}
       <div className="relative">
         <ComposerSurface.Main
           ref={composerMainSurfaceRef}
@@ -4106,8 +4104,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     "hidden sm:flex",
                 )}
               >
-                {composerAttachButton && !dictationTakesFooter ? (
-                  <div className="me-2">{composerAttachButton}</div>
+                {piModeControl && !dictationTakesFooter ? (
+                  <div className="me-2">{piModeControl}</div>
                 ) : null}
                 <div
                   data-chat-composer-actions="right"
@@ -4188,12 +4186,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           onCancel={() => speechInput.cancel()}
                           onSkipPostProcessing={() => speechInput.skipPostProcessing()}
                         />
-                        <ComposerSpeechButton
-                          state={speechInput.state}
-                          shortcutLabel={dictationShortcutLabel}
-                          disabled={dictationDisabled}
-                          onStart={() => void speechInput.start()}
-                        />
+                        {speechInput.configured ? (
+                          <ComposerSpeechButton
+                            state={speechInput.state}
+                            shortcutLabel={dictationShortcutLabel}
+                            disabled={dictationDisabled}
+                            onStart={() => void speechInput.start()}
+                          />
+                        ) : null}
                       </>
                     ) : null}
                     <VoiceInputSetup

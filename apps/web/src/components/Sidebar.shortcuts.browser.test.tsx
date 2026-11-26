@@ -1,10 +1,15 @@
 import { createMemoryHistory } from "@tanstack/react-router";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  parseScopedThreadKey,
+  scopedThreadKey,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import type * as Context from "effect/Context";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
+import "~/index.css";
 import { AppRoot } from "~/AppRoot";
 // The thread route loads ChatView lazily; its first transform would eat the test's timeout.
 import "~/components/ChatView";
@@ -39,7 +44,8 @@ vi.mock(import("~/state/server"), async (original) => {
   const { Atom } = await import("effect/reactivity");
   const { compileResolvedKeybindingsConfig } = await import("@t3tools/shared/keybindings");
   const keybindings = compileResolvedKeybindingsConfig([
-    { key: "mod+shift+]", command: "thread.next", when: "!previewFocus && !previewOpen" },
+    { key: "ctrl+arrowdown", command: "thread.next", when: "!previewFocus && !previewOpen" },
+    { key: "ctrl+arrowup", command: "thread.previous", when: "!previewFocus && !previewOpen" },
     { key: "mod+1", command: "thread.jump.1", when: "!previewFocus" },
   ]);
   return { ...actual, primaryServerKeybindingsAtom: Atom.make(keybindings) };
@@ -62,7 +68,13 @@ it("leaves thread shortcuts and their hints to the preview when their rules excl
     // AppRoot brings its own router.
     router: false,
   });
-  await expect.element(page.getByText(`Thread ${second.id}`).first()).toBeVisible();
+  const firstRowTitle = page.getByText(`Thread ${first.id}`, { exact: true }).first();
+  await expect.element(firstRowTitle).toBeVisible();
+  const firstRow = firstRowTitle.element().closest("[data-sidebar-row]")!;
+  const firstRef = parseScopedThreadKey(firstRow.getAttribute("data-sidebar-row")!)!;
+  const firstPath = `/${firstRef.environmentId}/${first.id}`;
+  await userEvent.click(firstRowTitle);
+  await vi.waitFor(() => expect(router.history.location.pathname).toBe(firstPath));
 
   const previewChrome = document.createElement("div");
   previewChrome.dataset.previewPanelMode = "browser";
@@ -70,7 +82,7 @@ it("leaves thread shortcuts and their hints to the preview when their rules excl
   document.body.append(previewChrome);
   using _chrome = { [Symbol.dispose]: () => previewChrome.remove() };
 
-  const press = () => userEvent.keyboard("{Control>}{Shift>}]{/Shift}{/Control}");
+  const press = () => userEvent.keyboard("{Control>}{ArrowDown}{/Control}");
   const jumpHint = () => document.querySelector("[data-jump-hint]");
   const whileHoldingControl = async (assertJumpHints: () => void) => {
     // Every deadline reads as due on subscribe, so hints skip the hold delay.
@@ -81,23 +93,51 @@ it("leaves thread shortcuts and their hints to the preview when their rules excl
     await vi.waitFor(assertJumpHints);
     await userEvent.keyboard("{/Control}");
   };
-  const firstPath = `/${ENVIRONMENT_ID}/${first.id}`;
 
-  await userEvent.click(page.getByRole("button", { name: "Reload" }));
+  previewChrome.querySelector("button")!.focus();
   await press();
   expect(router.history.location.pathname).toBe(firstPath);
   await whileHoldingControl(() => expect(jumpHint()).toBeNull());
 
-  const firstRef = scopeThreadRef(ENVIRONMENT_ID, first.id);
   await act(() => useRightPanelStore.getState().openBrowser(firstRef, null));
   if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   await press();
   expect(router.history.location.pathname).toBe(firstPath);
 
   await act(() => useRightPanelStore.getState().close(firstRef));
-  await press();
+  const navigate = router.navigate.bind(router);
+  let highlightBeforeNavigation: { path: string; current: string | null } | undefined;
+  const secondKey = scopedThreadKey(scopeThreadRef(firstRef.environmentId, second.id));
+  const secondRow = () => document.querySelector(`[data-sidebar-row="${secondKey}"]`);
+  using navigateSpy = vi.spyOn(router, "navigate").mockImplementationOnce((options) => {
+    highlightBeforeNavigation = {
+      path: router.history.location.pathname,
+      current: secondRow()?.getAttribute("aria-current") ?? null,
+    };
+    return navigate(options);
+  });
+  const chatFilter = () => getComputedStyle(document.querySelector("[data-chat-column]")!).filter;
+  await userEvent.keyboard("{Control>}{ArrowDown}");
+  await vi.waitFor(() => {
+    expect(secondRow()).toHaveAttribute("aria-current", "page");
+    expect(chatFilter().startsWith("blur(")).toBe(true);
+  });
+  await userEvent.keyboard("{ArrowUp}");
+  await vi.waitFor(() => {
+    expect(firstRow).toHaveAttribute("aria-current", "page");
+    expect(chatFilter()).toBe("none");
+  });
+  await userEvent.keyboard("{ArrowDown}");
+  await vi.waitFor(() => expect(secondRow()).toHaveAttribute("aria-current", "page"));
+  expect(router.history.location.pathname).toBe(firstPath);
+  expect(navigateSpy).not.toHaveBeenCalled();
+
+  await userEvent.keyboard("{/Control}");
   await vi.waitFor(() =>
-    expect(router.history.location.pathname).toBe(`/${ENVIRONMENT_ID}/${second.id}`),
+    expect(router.history.location.pathname).toBe(`/${firstRef.environmentId}/${second.id}`),
   );
+  await vi.waitFor(() => expect(chatFilter()).toBe("none"));
+  expect(navigateSpy).toHaveBeenCalledTimes(1);
+  expect(highlightBeforeNavigation).toEqual({ path: firstPath, current: "page" });
   await whileHoldingControl(() => expect(jumpHint()).not.toBeNull());
 });

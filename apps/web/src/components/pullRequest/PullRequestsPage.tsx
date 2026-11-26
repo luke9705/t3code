@@ -223,6 +223,7 @@ export function PullRequestsPage() {
     linkedSelection,
     expectedHosts,
     projectsKnown,
+    githubAccount,
   } = usePullRequestScope(search, hostReads);
   const rightPanelRef = capableEnvironments.length === 0 ? null : PULL_REQUESTS_PANEL_REF;
   const openPanelPullRequestUrl = useOpenPanelPullRequestUrl(rightPanelRef);
@@ -334,7 +335,8 @@ export function PullRequestsPage() {
   const turnRefreshToken = turnRefreshes
     .map(([environmentId, revision]) => `${environmentId}:${revision}`)
     .join("|");
-  const scopeKey = `${environmentKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
+  const listScope = githubAccount ? { githubAccount } : {};
+  const scopeKey = `${environmentKey}:${githubAccount}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   const statsScope: PullRequestStatsScope = { key: filterKey, policy: statsPolicy };
   const [page, setPage] = useState<{
@@ -374,6 +376,7 @@ export function PullRequestsPage() {
         {
           environmentId,
           input: {
+            ...listScope,
             state: search.state,
             involvement: search.involvement,
             limit: pageSize,
@@ -399,6 +402,7 @@ export function PullRequestsPage() {
     queries.map(({ environmentId, projectIds }) => ({
       environmentId,
       input: {
+        ...listScope,
         state: search.state,
         involvement: search.involvement,
         limit: PAGE_SIZE,
@@ -421,6 +425,7 @@ export function PullRequestsPage() {
     return environmentQueries.map(({ environmentId, projectIds }) => ({
       environmentId,
       input: {
+        ...listScope,
         state: "all",
         involvement: search.involvement,
         limit: PAGE_SIZE,
@@ -455,6 +460,7 @@ export function PullRequestsPage() {
       environmentQueries.map(({ environmentId, projectIds }) => ({
         environmentId,
         input: {
+          ...listScope,
           state: search.state,
           involvement,
           limit: PAGE_SIZE,

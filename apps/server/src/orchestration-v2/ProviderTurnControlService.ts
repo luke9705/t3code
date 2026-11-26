@@ -86,6 +86,18 @@ export interface ProviderTurnControlServiceV2Shape {
     | ProviderSessionManager.ProviderSessionManagerV2Error
     | ProviderAdapter.ProviderAdapterV2Error
   >;
+  /** Hands the live provider session a Pi extension command without starting a turn. */
+  readonly applyPiMode: (input: {
+    readonly threadId: ThreadId;
+    readonly providerSessionId: ProviderSessionId;
+    readonly providerThreadId: ProviderThreadId;
+    readonly piMode: "build" | "plan";
+  }) => Effect.Effect<
+    void,
+    | ProjectionStore.ProjectionStoreV2Error
+    | ProviderSessionManager.ProviderSessionManagerV2Error
+    | ProviderAdapter.ProviderAdapterV2Error
+  >;
   /** Best effort: a provider thread that is no longer live picks the title up when its next turn starts. */
   readonly applyThreadTitle: (input: {
     readonly threadId: ThreadId;
@@ -274,6 +286,21 @@ export const layer: Layer.Layer<
         const session = yield* sessions.get(providerThread.providerSessionId);
         if (Option.isNone(session) || session.value.applyThreadTitle === undefined) return;
         yield* session.value.applyThreadTitle({ providerThread, title: input.title });
+      }),
+      applyPiMode: Effect.fn("ProviderTurnControlService.applyPiMode")(function* (input) {
+        const { providerThreads } = yield* projections.getThreadRecords(input.threadId, [
+          "providerThreads",
+        ]);
+        const providerThread = providerThreads.find(
+          (candidate) => candidate.id === input.providerThreadId,
+        );
+        if (!providerThread) return;
+        const session = yield* sessions.get(input.providerSessionId);
+        if (Option.isNone(session) || session.value.applyExtensionCommand === undefined) return;
+        yield* session.value.applyExtensionCommand({
+          providerThread,
+          command: input.piMode === "plan" ? "/plan on" : "/plan off",
+        });
       }),
       interrupt: Effect.fn("ProviderTurnControlService.interrupt")(
         function* (input) {

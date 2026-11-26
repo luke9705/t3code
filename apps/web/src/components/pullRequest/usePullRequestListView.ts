@@ -2,6 +2,7 @@ import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connect
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { parsePullRequestQuery } from "@t3tools/client-runtime/pull-request-query";
 import {
+  AuthOrchestrationOperateScope,
   type EnvironmentId,
   type ProjectId,
   type PullRequestInvolvement,
@@ -12,7 +13,8 @@ import {
 import { useEffect, useState } from "react";
 
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "~/state/entities";
-import { useEnvironments } from "~/state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
+import { useEnvironmentScope } from "~/state/session";
 import {
   applyPullRequestOverrides,
   findProjectForRepository,
@@ -69,6 +71,7 @@ export function usePullRequestScope(
   hostAvailability: PullRequestHostAvailability,
 ) {
   const { environments } = useEnvironments();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const allProjects = useProjects();
   const projectsKnown = useAllEnvironmentShellsBootstrapped();
   const capableEnvironments = environments
@@ -121,13 +124,24 @@ export function usePullRequestScope(
     linkedProjectId === undefined && search.repository !== undefined
       ? projectForRepository
       : findScopedProject(projects, selectedEnvironmentId, linkedProjectId ?? scopedProjectId);
-  const queryEnvironmentIds = resolveQueryEnvironmentIds(
-    environmentIds,
-    projects,
-    scopedProject,
-    scopedProjectId,
-    projectsKnown,
-  );
+  const accountEnvironmentId =
+    scopedEnvironmentId ?? primaryEnvironmentId ?? environmentIds[0] ?? null;
+  const canReadAccount = useEnvironmentScope(accountEnvironmentId, AuthOrchestrationOperateScope);
+  const githubAccount =
+    scopedProjectId === undefined &&
+    (search.host === undefined || search.host === "github.com") &&
+    accountEnvironmentId !== null &&
+    environmentIds.includes(accountEnvironmentId) &&
+    canReadAccount;
+  const queryEnvironmentIds = githubAccount
+    ? [accountEnvironmentId]
+    : resolveQueryEnvironmentIds(
+        environmentIds,
+        projects,
+        scopedProject,
+        scopedProjectId,
+        projectsKnown,
+      );
   const unreachable = new Set(
     environments.flatMap((environment) =>
       UNREACHABLE_PHASES.has(environment.connection.phase) ? [environment.environmentId] : [],
@@ -140,7 +154,7 @@ export function usePullRequestScope(
     readonly projectIds?: ReadonlyArray<ProjectId>;
   }> => {
     const plain = queryEnvironmentIds.map((environmentId) => ({ environmentId }));
-    if (!projectsKnown || scopedProjectId !== undefined) return plain;
+    if (githubAccount || !projectsKnown || scopedProjectId !== undefined) return plain;
     return pullRequestProjectQueries(projects, queryEnvironmentIds, availability, unreachable);
   };
   const environmentQueries = queriesFor(hostAvailability);
@@ -200,6 +214,7 @@ export function usePullRequestScope(
     linkedSelection,
     expectedHosts,
     projectsKnown,
+    githubAccount,
   };
 }
 

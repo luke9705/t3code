@@ -1884,6 +1884,22 @@ describe("MessagesTimeline attachments", () => {
   });
 });
 
+it("shows a small loading indicator instead of the empty conversation while history loads", async () => {
+  setup();
+  const base = baseProps();
+  await using screen = await renderElement(
+    <MessagesTimeline {...base} timelineEntries={[]} loadingMessages hideEmptyPlaceholder />,
+  );
+  await expect.element(page.getByRole("status", { name: "Loading", exact: true })).toBeVisible();
+  await screen.rerender(
+    <MessagesTimeline {...base} timelineEntries={[message("Loaded history")]} />,
+  );
+  await expect.element(page.getByText("Loaded history")).toBeVisible();
+  await expect
+    .element(page.getByRole("status", { name: "Loading", exact: true }))
+    .not.toBeInTheDocument();
+});
+
 describe("MessagesTimeline thread find", () => {
   // Opening find is navigation; on a list already showing the thread the open
   // action navigates, so the list itself releases follow only when it starts

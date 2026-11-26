@@ -331,6 +331,9 @@ export function applyOrchestrationV2ProjectionEvent(
         ...projection,
         thread: applyOrchestrationV2ThreadVisit(projection.thread, event.payload),
       };
+    // A mode switch is not activity: the thread row changes without bumping updatedAt.
+    case "thread.pi-mode-updated":
+      return { ...projection, thread: event.payload };
     case "run.created":
     case "run.updated": {
       // Lifecycle updates carry the run as it was when the turn started. What the run returned

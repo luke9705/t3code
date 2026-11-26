@@ -74,7 +74,6 @@ import {
   clearBackgroundDraftSubmissionByRef,
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
-  setQuietDraftPromotion,
   restoreFailedDraftThread,
   checkoutPullRequestUrlToLink,
   composerDraftHasUserContent,
@@ -1543,31 +1542,61 @@ export function useComposerSend(input: ComposerSendInput) {
           )
         : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
-      const startPromise = startThreadTurn({
-        environmentId,
-        input: {
-          threadId: threadIdForSend,
-          message: {
-            messageId: messageIdForSend,
-            role: "user",
-            attachments: turnAttachmentsResult.value,
-            ...withMessageContext({
-              text: outgoingMessageText,
-              context: buildOutgoingMessageContext(
-                boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
-              ),
-            }),
+      // A Pi mode picked while no session was live goes first so the prompt starts under it.
+      const leadingPiMode =
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.piMode ?? null;
+      const startTurn = (withBootstrap: boolean) =>
+        startThreadTurn({
+          environmentId,
+          input: {
+            threadId: threadIdForSend,
+            message: {
+              messageId: messageIdForSend,
+              role: "user",
+              attachments: turnAttachmentsResult.value,
+              ...withMessageContext({
+                text: outgoingMessageText,
+                context: buildOutgoingMessageContext(
+                  boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
+                ),
+              }),
+            },
+            modelSelection: ctxSelectedModelSelection,
+            titleSeed: title,
+            runtimeMode,
+            interactionMode: DEFAULT_INTERACTION_MODE,
+            dispatchMode: turnDispatchMode,
+            ...(freshArm === undefined ? {} : { freshContext: true }),
+            ...(bootstrap && withBootstrap ? { bootstrap } : {}),
+            createdAt: messageCreatedAt,
           },
-          modelSelection: ctxSelectedModelSelection,
-          titleSeed: title,
-          runtimeMode,
-          interactionMode: DEFAULT_INTERACTION_MODE,
-          dispatchMode: turnDispatchMode,
-          ...(freshArm === undefined ? {} : { freshContext: true }),
-          ...(bootstrap ? { bootstrap } : {}),
-          createdAt: messageCreatedAt,
-        },
-      });
+        });
+      const startPromise = (async () => {
+        if (leadingPiMode !== null) {
+          const modeResult = await startThreadTurn({
+            environmentId,
+            input: {
+              threadId: threadIdForSend,
+              message: {
+                messageId: newMessageId(),
+                role: "user",
+                text: leadingPiMode === "plan" ? "/plan on" : "/plan off",
+                attachments: [],
+              },
+              modelSelection: ctxSelectedModelSelection,
+              runtimeMode,
+              interactionMode: DEFAULT_INTERACTION_MODE,
+              ...(bootstrap ? { bootstrap } : {}),
+            },
+          });
+          // The prompt must still go out; a failed mode turn falls back to the plain send.
+          if (modeResult._tag === "Success") {
+            useComposerDraftStore.getState().setPiMode(composerDraftTarget, null);
+            return startTurn(false);
+          }
+        }
+        return startTurn(true);
+      })();
       if (backgroundThreadRef) {
         try {
           backgroundDraftOpened = Boolean(
@@ -1785,96 +1814,28 @@ export function useComposerSend(input: ComposerSendInput) {
   // No load-balancing refresh: it bails once the draft is no longer displayed, which is the
   // only time a detached send runs, so the draft keeps the environment it was dictated for.
   const captureDetachedSend = useStableCallback(() => onSend);
-  const sendPiModeCommand = async (text: "/plan on" | "/plan off") => {
-    if (!activeThread || !activeProject || !clientSettingsHydrated || sendInFlightRef.current)
-      return;
+  const setThreadPiMode = useOrchestrationCommand(threadEnvironment.setPiMode, {
+    reportFailure: false,
+  });
+  // /plan is a Pi extension command: Pi applies it on receipt, so the mode switches even mid-turn.
+  const sendPiModeCommand = async (text: "/plan on" | "/plan off", sessionLive: boolean) => {
+    if (!activeThread || !activeProject) return;
     const context = composerRef.current?.getSendContext();
     if (context?.selectedProvider !== "pi" || !context.providerAvailable) return;
-
-    const { baseBranchForWorktree, missingWorktreeBaseBranch } = planComposerTurn({
-      messageText: text,
-      sendQueuesBehindSetup: false,
-      isServerThread,
-      activeMessageCount,
-      sendEnvMode,
-      worktreePath: activeThread.worktreePath,
-      activeThreadBranch,
-      projectIsGitRepo: isGitRepo,
-      plainProjectBaseBranch: readWorktreeBaseBranch(activeProject),
-      isScratchProject: activeProjectIsScratch,
-      resumeCompactionTokens: null,
-      keepFullHistory: true,
-      phase,
-      dispatchMode: "auto",
-      freshContext: false,
-    });
-    if (missingWorktreeBaseBranch) {
-      setThreadError(
-        activeThread.id,
-        m(msg("Select a base branch before sending in New worktree mode.")),
-      );
+    setThreadError(activeThread.id, null);
+    // Without a live Pi session there is nothing to apply the command to yet (a draft has no
+    // server projection at all): keep the choice here and send it ahead of the next prompt.
+    if (isLocalDraftThread || !sessionLive) {
+      useComposerDraftStore
+        .getState()
+        .setPiMode(composerDraftTarget, text === "/plan on" ? "plan" : "build");
       return;
     }
-    const bootstrap =
-      isLocalDraftThread || baseBranchForWorktree
-        ? {
-            ...(isLocalDraftThread
-              ? {
-                  createThread: {
-                    projectId: activeProject.id,
-                    title: activeThread.title,
-                    modelSelection: context.selectedModelSelection,
-                    runtimeMode,
-                    interactionMode: DEFAULT_INTERACTION_MODE,
-                    branch: activeThreadBranch,
-                    worktreePath: activeThread.worktreePath,
-                    createdAt: activeThread.createdAt,
-                  },
-                }
-              : {}),
-            ...(baseBranchForWorktree
-              ? {
-                  prepareWorktree: {
-                    projectCwd: activeProject.workspaceRoot,
-                    baseBranch: baseBranchForWorktree,
-                    ...(startFromOrigin ? { startFromOrigin: true } : {}),
-                    ...(worktreeRepositories ? { repositories: worktreeRepositories } : {}),
-                    runSetupScript: true,
-                  },
-                }
-              : {}),
-          }
-        : undefined;
-    const quietPromotion = isLocalDraftThread
-      ? scopeThreadRef(environmentId, activeThread.id)
-      : null;
-    if (quietPromotion) setQuietDraftPromotion(quietPromotion, true);
-    sendInFlightRef.current = true;
-    setThreadError(activeThread.id, null);
-    const result = await startThreadTurn({
+    const result = await setThreadPiMode({
       environmentId,
-      input: {
-        threadId: activeThread.id,
-        message: { messageId: newMessageId(), role: "user", text, attachments: [] },
-        modelSelection: context.selectedModelSelection,
-        runtimeMode,
-        interactionMode: DEFAULT_INTERACTION_MODE,
-        dispatchMode: "start",
-        ...(bootstrap ? { bootstrap } : {}),
-      },
-    }).finally(() => {
-      sendInFlightRef.current = false;
+      input: { threadId: activeThread.id, piMode: text === "/plan on" ? "plan" : "build" },
     });
-    if (result._tag === "Failure" && quietPromotion) setQuietDraftPromotion(quietPromotion, false);
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      if (
-        isLocalDraftThread &&
-        draftId &&
-        draftThread &&
-        wasBootstrapThreadDeleted(squashAtomCommandFailure(result))
-      ) {
-        restoreFailedDraftThread(draftId, draftThread, newThreadId());
-      }
       setThreadError(
         activeThread.id,
         thrownErrorMessage(squashAtomCommandFailure(result), m) ??

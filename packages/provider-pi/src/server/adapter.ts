@@ -3480,6 +3480,29 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             Effect.catch((cause) => protocolError("Pi could not rename the session", cause)),
           );
         }),
+        applyExtensionCommand: Effect.fn("PiAdapter.applyExtensionCommand")(function* ({
+          providerThread,
+          command,
+        }) {
+          const state = threadState;
+          if (
+            state?.providerThread.id !== providerThread.id ||
+            registrationInProgress ||
+            !isLiveSessionOf(state, providerThread.nativeThreadRef?.nativeId)
+          )
+            return;
+          // Pi handles an extension command on receipt: no run starts, so this is safe mid-turn.
+          // Any other disposition would mean a user turn was created, which the caller must learn about.
+          const result = yield* request({ type: "prompt", message: command }).pipe(
+            Effect.catch((cause) => protocolError("Pi could not apply the command", cause)),
+          );
+          const disposition = recordString(result, "disposition");
+          if (disposition !== undefined && disposition !== "handled") {
+            return yield* protocolError(
+              `Pi did not handle ${command} as an extension command (disposition: ${disposition})`,
+            );
+          }
+        }),
         compactThread: (turnInput) =>
           runtime.startTurn({
             ...turnInput,

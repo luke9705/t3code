@@ -56,7 +56,7 @@ import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { resolveWorktreeRepositorySelection } from "@t3tools/client-runtime/state/thread-repositories";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
-import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
+import type { PiSessionStatus, UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { freshSessionBannerItem } from "./chat/ComposerFreshSession";
 import { heldComposerSendBannerItem } from "./chat/ComposerHeldSendBanner";
@@ -392,7 +392,6 @@ import { assetEnvironment } from "../state/assets";
 import { readEnvironmentScope, readPreparedConnection } from "../state/session";
 import { useAtomCommand } from "../state/use-atom-command";
 import { agentSessionImport, piSessionStatus } from "../state/agentSessions";
-import type { PiSessionStatus } from "@t3tools/contracts";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { observeResize } from "~/lib/observeResize";
@@ -639,6 +638,9 @@ export default function ChatView(props: ChatViewProps) {
   );
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
+  );
+  const composerDraftPiMode = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.piMode ?? null,
   );
   const composerModelSelectionExplicit = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.modelSelectionExplicit === true,
@@ -2777,16 +2779,18 @@ export default function ChatView(props: ChatViewProps) {
     (isLocalDraftThread || (isServerThread && serverProjection !== null))
       ? activeProviderStatus?.workspaceSnapshots?.find(({ cwd }) => cwd === gitCwd)?.initialPiMode
       : undefined;
-  const piMode = livePiMode ?? initialPiMode;
   const nativePiStatus = useNativePiStatus(
     selectedProvider === "pi" && activeProviderThread?.driver === "pi" ? routeThreadRef : null,
     activeProviderThread?.nativeThreadRef?.nativeId,
   );
-  const savedPiMode =
-    selectedProvider === "pi" && activeProviderThread?.driver === "pi"
-      ? (serverProjection?.thread.savedPiMode ?? undefined)
+  // The RPC status arrives once Pi boots; the session's last recorded mode stands in until then.
+  const nativePiMode =
+    nativePiStatus?.mode === "build" || nativePiStatus?.mode === "plan"
+      ? nativePiStatus.mode
       : undefined;
-  const fallbackPiMode = initialPiMode ?? nativePiStatus?.mode ?? savedPiMode;
+  // A choice made before Pi is up is sent ahead of the next prompt; a live status wins over it.
+  const piMode = livePiMode ?? nativePiMode ?? composerDraftPiMode ?? initialPiMode;
+  const piSessionLive = livePiMode !== undefined || nativePiMode !== undefined;
   const composerBannerItems = (() => {
     const fallbackSelection = draftFallback?.selection;
     const defaultSelection =
@@ -2838,19 +2842,12 @@ export default function ChatView(props: ChatViewProps) {
         : [];
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const visibleStatuses = extensionStatuses.filter(
-      ({ key }) => key !== PI_FOOTER_METRICS_STATUS && key !== PI_CONTEXT_COMPOSITION_STATUS,
+      ({ key }) =>
+        key !== PI_FOOTER_METRICS_STATUS &&
+        key !== PI_CONTEXT_COMPOSITION_STATUS &&
+        key !== "plan-mode",
     );
-    if (livePiMode === undefined && fallbackPiMode !== undefined) {
-      visibleStatuses.unshift({
-        key: "plan-mode",
-        text: fallbackPiMode === "plan" ? gt("plan mode") : gt("build mode"),
-      });
-    }
-    if (
-      nativePiStatus &&
-      livePiMode === undefined &&
-      !visibleStatuses.some(({ key }) => key === "lean-jobs")
-    ) {
+    if (nativePiStatus && (nativePiStatus.shells > 0 || nativePiStatus.subagents > 0)) {
       const { shells, subagents } = nativePiStatus;
       const text = [
         shells ? `${shells} shell${shells === 1 ? "" : "s"}` : "",
@@ -3254,11 +3251,7 @@ export default function ChatView(props: ChatViewProps) {
   const onWorktreeSetupWorkLocallyStable = useStableCallback(onWorktreeSetupWorkLocally);
   const togglePiModeStable = useStableCallback((command: "/plan on" | "/plan off") => {
     if (!activeThread) return;
-    if (isWorking || isSendBusy || phase === "connecting") {
-      setThreadError(activeThread.id, gt("Wait for the current turn before switching Pi mode."));
-      return;
-    }
-    void sendPiModeCommand(command);
+    void sendPiModeCommand(command, piSessionLive);
   });
   const onComposerSendStable = useStableCallback(onSend);
   const sendPreviewAnnotation = (
@@ -3596,6 +3589,7 @@ export default function ChatView(props: ChatViewProps) {
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
+          !embedded && "group-has-data-[sidebar-thread-pending]/sidebar-wrapper:blur-xs",
           rightPanelMaximized ? "w-0 flex-none" : "flex-1",
         )}
         data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}

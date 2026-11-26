@@ -835,6 +835,11 @@ export interface ProviderAdapterV2SessionRuntime {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly title: string;
   }) => Effect.Effect<void, ProviderAdapterV2Error>;
+  /** Runs a provider extension command on the live session without starting a turn; best effort. */
+  readonly applyExtensionCommand?: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly command: string;
+  }) => Effect.Effect<void, ProviderAdapterV2Error>;
   readonly stopTask?: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly taskId: string;

@@ -307,6 +307,7 @@ it("tests the selected model after download and preserves its transcript across 
     async () => {
       await vi.mocked(useEnvironmentSpeechInput).withImplementation(
         (input) => ({
+          configured: true,
           available: true,
           status,
           transcriptionEnvironmentId: target.environmentId,

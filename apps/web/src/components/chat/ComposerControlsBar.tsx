@@ -4,6 +4,7 @@ import type { ProviderInstanceEntry } from "../../providerInstances";
 import { type AppModelOption } from "../../modelSelection";
 import { useGT, useMessages } from "gt-react";
 import { CircleAlertIcon } from "lucide-react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerControl } from "./ComposerControl";
 import {
@@ -22,6 +23,7 @@ import {
 import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { cn } from "~/lib/utils";
 import { formatContextWindowTokens } from "~/lib/contextWindow";
+import { observeResize } from "~/lib/observeResize";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { resolveComposerTraitsInput } from "./composerProviderState";
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
@@ -107,6 +109,49 @@ function PiContextRing({
           )}
         >
           {usage.maxTokens != null ? `${used}/${formatContextWindowTokens(usage.maxTokens)}` : used}
+        </span>
+      </TooltipTrigger>
+      <TooltipPopup side="top">{label}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function PiFooterMetrics({ label, afterContext }: { label: string; afterContext: boolean }) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const labelRef = useRef<HTMLSpanElement>(null);
+  const [fits, setFits] = useState(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the full metrics group is visible only when both observed widths fit
+  useLayoutEffect(() => {
+    const trigger = triggerRef.current;
+    const content = labelRef.current;
+    if (!trigger || !content) return;
+    const measure = () =>
+      setFits(content.getBoundingClientRect().width <= trigger.getBoundingClientRect().width);
+    measure();
+    return observeResize([trigger, content], measure);
+  }, []);
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            ref={triggerRef}
+            data-pi-footer-metrics
+            tabIndex={fits ? 0 : undefined}
+            className={cn(
+              "me-1 hidden min-w-0 overflow-hidden whitespace-nowrap text-xs text-muted-foreground tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring @min-[32rem]/composer-surface:block",
+              !fits && "invisible order-first",
+            )}
+          />
+        }
+      >
+        <span ref={labelRef} className="inline-block w-max">
+          {afterContext ? (
+            <span aria-hidden="true" className="me-1.5">
+              ·
+            </span>
+          ) : null}
+          {label}
         </span>
       </TooltipTrigger>
       <TooltipPopup side="top">{label}</TooltipPopup>
@@ -229,11 +274,12 @@ export function ComposerControlsBar(props: {
     measuredHiddenBlockCount,
   });
   const controlSize = composerControlsCollapsed ? "xs" : "sm";
-  // Already-running Pi processes can still publish the unprefixed decode rate.
-  const piFooterMetrics = props.piFooterMetrics?.replace(
-    /^(?=\d+(?:\.\d+)? tok\/s(?: · |$))/,
-    "TPS ",
-  );
+  // Existing Pi processes can still publish an unprefixed or missing decode rate.
+  const piFooterMetrics =
+    props.piFooterMetrics
+      ?.replace(/^(?=\d+(?:\.\d+)? tok\/s(?: · |$))/, "TPS ")
+      .replace(/^(?=TTFT )/, "TPS ~ · ") ??
+    (props.piContextWindow ? "TPS ~ · TTFT ~ · Cache ~" : undefined);
   const gt = useGT();
   const m = useMessages();
   const applyThreadModelPick = useApplyThreadModelPick();
@@ -362,25 +408,7 @@ export function ComposerControlsBar(props: {
         />
       ) : null}
       {selectedProvider === "pi" && piFooterMetrics && !composerControlsCollapsed ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                data-pi-footer-metrics
-                tabIndex={0}
-                className="me-1 hidden min-w-0 truncate whitespace-nowrap text-xs text-muted-foreground tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring @min-[32rem]/composer-surface:block"
-              />
-            }
-          >
-            {props.piContextWindow ? (
-              <span aria-hidden="true" className="me-1.5">
-                ·
-              </span>
-            ) : null}
-            {piFooterMetrics}
-          </TooltipTrigger>
-          <TooltipPopup side="top">{piFooterMetrics}</TooltipPopup>
-        </Tooltip>
+        <PiFooterMetrics label={piFooterMetrics} afterContext={!!props.piContextWindow} />
       ) : null}
       {composerModelPicker}
 

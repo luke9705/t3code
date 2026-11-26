@@ -11,6 +11,7 @@ import { MarkdownFindContext } from "./markdownFindContext";
 import { useChatCanvas } from "./ChatCanvasContext";
 import { WorkLogBlock } from "./WorkLog";
 import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
+import { Spinner } from "../ui/spinner";
 import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
 import { deriveTimelineMinimapItems } from "./timelineMinimapItems";
 import {
@@ -334,6 +335,7 @@ interface MessagesTimelineProps {
   onFooterGrow?: () => void;
   findOpen?: boolean;
   hideEmptyPlaceholder?: boolean;
+  loadingMessages?: boolean;
   /** Composer space to center the empty state against; held steady through collapse. */
   emptyPlaceholderInset: number;
   topFadeEnabled?: boolean;
@@ -437,6 +439,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onViewportAttach,
   onFooterGrow,
   hideEmptyPlaceholder = false,
+  loadingMessages = false,
   emptyPlaceholderInset,
   topFadeEnabled = false,
   historyControls,
@@ -1455,15 +1458,18 @@ const ConversationTimeline = memo(function ConversationTimeline({
     if (scrollNode) forwardWheelToTimeline(event, scrollNode);
   };
 
+  if (loadingMessages || (showsEmptyState && hideEmptyPlaceholder)) {
+    return (
+      <>
+        {activityAnnouncer}
+        <div className="grid h-full min-h-0 place-items-center" data-timeline-loading="true">
+          {loadingMessages ? <Spinner size="sm" tone="muted" /> : null}
+        </div>
+      </>
+    );
+  }
+
   if (showsEmptyState) {
-    if (hideEmptyPlaceholder) {
-      return (
-        <>
-          {activityAnnouncer}
-          <div className="h-full min-h-0" data-timeline-loading="true" />
-        </>
-      );
-    }
     return (
       <>
         {activityAnnouncer}

@@ -415,8 +415,8 @@ describe("remembered pull request list controls", () => {
   // regression: #9188 corrupt stored list controls broke the page
   it("falls back to the default controls when storage is corrupt", () => {
     const storage = makeStorage();
-    storage.setItem("t3.pullRequests.preferences", "{not json");
-    expect(readPullRequestListPreferences(storage)).toEqual({ involvement: "all", state: "open" });
+    storage.setItem("t3.pullRequests.accountPreferences", "{not json");
+    expect(readPullRequestListPreferences(storage)).toEqual({ involvement: "all", state: "all" });
   });
 
   it("falls back when browser policy denies storage", () => {
@@ -428,7 +428,7 @@ describe("remembered pull request list controls", () => {
         throw new Error("storage denied");
       },
     };
-    expect(readPullRequestListPreferences(denied)).toEqual({ involvement: "all", state: "open" });
+    expect(readPullRequestListPreferences(denied)).toEqual({ involvement: "all", state: "all" });
     expect(() =>
       writePullRequestListPreferences({ involvement: "all", state: "open" }, denied),
     ).not.toThrow();

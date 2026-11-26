@@ -46,6 +46,7 @@ import {
   revertThreadCheckpoint,
   setThreadInteractionMode,
   setThreadRuntimeMode,
+  setThreadPiMode,
   pinThread,
   reorderPinnedThread,
   reorderActiveThread,
@@ -341,6 +342,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     setRuntimeMode: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:set-runtime-mode",
       execute: setThreadRuntimeMode,
+      scheduler,
+      concurrency,
+    }),
+    setPiMode: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-pi-mode",
+      execute: setThreadPiMode,
       scheduler,
       concurrency,
     }),

@@ -329,7 +329,7 @@ it.each([
   setup();
   mocks.settings = { ...legacy, speechSilenceFiltering: true };
   await using screen = await render(<Probe />);
-  // The composer mic and the dictation shortcut both gate on this.
+  expect(mocks.voice.configured).toBe(false);
   expect(mocks.voice.available).toBe(true);
   await act(() => mocks.voice.start());
   expect(screen.router?.state.location).toMatchObject({
@@ -350,6 +350,7 @@ it.each([true, false])(
     mocks.settings = { speechSilenceFiltering };
     await using _screen = await render(<Probe />);
     expect(mocks.voice.transcriptionEnvironmentId).toBe("env-a");
+    expect(mocks.voice.configured).toBe(true);
     await act(() => mocks.voice.start());
     expect(mocks.voice.state.phase).toBe("recording");
     await act(() => mocks.voice.stop());

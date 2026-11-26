@@ -2795,6 +2795,53 @@ it.effect("shares one cold viewer lookup across distinct concurrent lists", () =
   }),
 );
 
+it.effect(
+  "lists the signed-in account across repositories and continues across a shared timestamp",
+  () =>
+    Effect.gen(function* () {
+      const updatedAt = "2026-07-02T00:00:00Z";
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        ],
+        providers: [
+          fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+            listChangeRequestsAcross: ({ githubAccount, repositories, cursor }) => {
+              if (!githubAccount) return Effect.succeed({ items: [], truncated: false });
+              assert.deepStrictEqual(repositories, []);
+              if (cursor === undefined) {
+                return Effect.succeed({
+                  items: [batchedChangeRequest(1, "other/docs", updatedAt)],
+                  truncated: true,
+                });
+              }
+              assert.deepStrictEqual(cursor.seenAt, [{ repository: "other/docs", number: 1 }]);
+              return Effect.succeed({
+                items: [batchedChangeRequest(1, "acme/web", updatedAt)],
+                truncated: false,
+              });
+            },
+          }),
+        ],
+      });
+      const input = { state: "all", githubAccount: true, limit: 1 } as const;
+      const workspace = yield* service.list({ state: "all", limit: 1 });
+      assert.deepStrictEqual(workspace.entries, []);
+      const first = yield* service.list(input);
+      assert.deepStrictEqual(
+        first.entries.map(({ repository }) => repository),
+        ["other/docs"],
+      );
+      assert.isTrue(first.truncated);
+      const next = yield* service.list({ ...input, cursors: first.nextCursors });
+      assert.deepStrictEqual(
+        next.entries.map(({ repository }) => repository),
+        ["acme/web"],
+      );
+      assert.isFalse(next.truncated);
+    }),
+);
+
 it.effect("a listing narrowed to some projects is its own cache entry", () =>
   Effect.gen(function* () {
     const asked: ReadonlyArray<string>[] = [];

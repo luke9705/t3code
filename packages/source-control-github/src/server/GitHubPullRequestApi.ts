@@ -541,6 +541,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly cwd: string;
       readonly host: string;
       readonly repositories: ReadonlyArray<string>;
+      readonly githubAccount?: true;
       readonly state: PullRequestListState;
       readonly involvement: PullRequestInvolvement;
       readonly viewer: string;
@@ -1005,6 +1006,7 @@ const SEARCH_REPOSITORY = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 /** Unquoted repo: values must not inject qualifiers. */
 function searchQuery(input: {
   readonly repositories: ReadonlyArray<string>;
+  readonly githubAccount?: true;
   readonly state: PullRequestListState;
   readonly involvement: PullRequestInvolvement;
   readonly viewer: string;
@@ -1012,8 +1014,11 @@ function searchQuery(input: {
   readonly cursor?: Pick<ProviderListCursor, "updatedBefore"> | undefined;
   readonly filters?: PullRequestListFilters | undefined;
 }): string | null {
-  if (input.repositories.length === 0) return null;
-  const repositories = input.repositories.map((repository) => repository.trim());
+  if (!input.githubAccount && input.repositories.length === 0) return null;
+  const repositories = input.githubAccount
+    ? []
+    : input.repositories.map((repository) => repository.trim());
+  const viewer = input.githubAccount ? "@me" : input.viewer;
   if (!repositories.every((repository) => SEARCH_REPOSITORY.test(repository))) return null;
   const query = input.query?.trim() ?? "";
   return [
@@ -1021,11 +1026,12 @@ function searchQuery(input: {
     ...(input.state === "open" ? ["is:open"] : []),
     ...(input.state === "closed" ? ["is:closed", "is:unmerged"] : []),
     ...(input.state === "merged" ? ["is:merged"] : []),
-    ...(input.involvement === "authored" ? [`author:${input.viewer}`] : []),
-    ...(input.involvement === "reviewing" ? [`review-requested:${input.viewer}`] : []),
+    ...(input.githubAccount && input.involvement === "all" ? ["involves:@me"] : []),
+    ...(input.involvement === "authored" ? [`author:${viewer}`] : []),
+    ...(input.involvement === "reviewing" ? [`review-requested:${viewer}`] : []),
     ...(query.length === 0 ? [] : [searchPhrase(query)]),
     ...(input.cursor === undefined ? [] : [`updated:<=${input.cursor.updatedBefore}`]),
-    ...filterQualifiers(input.filters, input.viewer),
+    ...filterQualifiers(input.filters, viewer),
     "sort:updated-desc",
     ...repositories.map((repository) => `repo:${repository}`),
   ].join(" ");
@@ -2092,60 +2098,66 @@ export const make = Effect.gen(function* () {
       );
     }),
 
-    searchPullRequests: Effect.fn("GitHubPullRequestApi.searchPullRequests")(function* (input) {
-      const query = searchQuery(input);
-      if (query === null) {
-        return yield* new GitHubRepositorySelectorError({
-          cwd: input.cwd,
-          operation: "searchPullRequests",
-        });
-      }
-      // Search cannot exclude numbers, so the rows already delivered at the boundary come back
-      // first; read past them so they do not use up the limit.
-      const seenAt = new Set(
-        (input.cursor?.seenAt ?? []).map(
-          ({ repository, number }) => `${repository.trim().toLowerCase()}#${number}`,
-        ),
-      );
-      const stacks = input.host.toLowerCase() === "github.com";
-      let endedShort = false;
-      const {
-        items: rawItems,
-        rawCount,
-        truncated,
-      } = yield* collect(
-        Math.min(input.limit + 1, PULL_REQUEST_SEARCH_MAX_ROWS) + seenAt.size,
-        (after, rows) =>
-          client
-            .PullRequestSearch({ q: query, first: pageRows(rows), after, stacks, stats: false })
-            .pipe(
-              graphql({ ...input, operation: "searchPullRequests" }),
-              Effect.map(({ search }) => {
-                const page = toPullRequestRows(search);
-                // A short page that says it has more is where this read stops, not a gap to read past.
-                const short = page.endCursor !== null && page.rawCount < pageRows(rows);
-                if (short) endedShort = true;
-                return {
-                  items: page.rows.flatMap(({ item, repository }) =>
-                    repository === null ? [] : [{ ...item, repository }],
-                  ),
-                  rawCount: page.rawCount,
-                  endCursor: short ? null : page.endCursor,
-                };
-              }),
-            ),
-      );
-      const items = rawItems.filter(
-        (item) =>
-          item.updatedAt !== input.cursor?.updatedBefore ||
-          !seenAt.has(`${item.repository.trim().toLowerCase()}#${item.number}`),
-      );
-      return {
-        items: items.slice(0, input.limit),
-        truncated:
-          truncated || endedShort || rawCount - (rawItems.length - items.length) > input.limit,
-      };
-    }),
+    searchPullRequests: Effect.fn("GitHubPullRequestApi.searchPullRequests")(
+      function* (input) {
+        const query = searchQuery(input);
+        if (query === null) {
+          return yield* new GitHubRepositorySelectorError({
+            cwd: input.cwd,
+            operation: "searchPullRequests",
+          });
+        }
+        // Search cannot exclude numbers, so the rows already delivered at the boundary come back
+        // first; read past them so they do not use up the limit.
+        const seenAt = new Set(
+          (input.cursor?.seenAt ?? []).map(
+            ({ repository, number }) => `${repository.trim().toLowerCase()}#${number}`,
+          ),
+        );
+        const stacks = input.host.toLowerCase() === "github.com";
+        let endedShort = false;
+        const {
+          items: rawItems,
+          rawCount,
+          truncated,
+        } = yield* collect(
+          Math.min(input.limit + 1, PULL_REQUEST_SEARCH_MAX_ROWS) + seenAt.size,
+          (after, rows) =>
+            client
+              .PullRequestSearch({ q: query, first: pageRows(rows), after, stacks, stats: false })
+              .pipe(
+                graphql({ ...input, operation: "searchPullRequests" }),
+                Effect.map(({ search }) => {
+                  const page = toPullRequestRows(search);
+                  // A short page that says it has more is where this read stops, not a gap to read past.
+                  const short = page.endCursor !== null && page.rawCount < pageRows(rows);
+                  if (short) endedShort = true;
+                  return {
+                    items: page.rows.flatMap(({ item, repository }) =>
+                      repository === null ? [] : [{ ...item, repository }],
+                    ),
+                    rawCount: page.rawCount,
+                    endCursor: short ? null : page.endCursor,
+                  };
+                }),
+              ),
+        );
+        const items = rawItems.filter(
+          (item) =>
+            item.updatedAt !== input.cursor?.updatedBefore ||
+            !seenAt.has(`${item.repository.trim().toLowerCase()}#${item.number}`),
+        );
+        return {
+          items: items.slice(0, input.limit),
+          truncated:
+            truncated || endedShort || rawCount - (rawItems.length - items.length) > input.limit,
+        };
+      },
+      (effect, input) =>
+        input.githubAccount
+          ? withVerifiedCredential({ cwd: input.cwd, host: input.host }, () => effect)
+          : effect,
+    ),
 
     listPullRequestStats: Effect.fn("GitHubPullRequestApi.listPullRequestStats")(
       function* (input) {

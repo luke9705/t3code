@@ -351,6 +351,8 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   modelSelectionExplicit: Schema.optionalKey(Schema.Boolean),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
+  /** Pi plan/build mode chosen before the draft's thread exists; sent ahead of the first prompt. */
+  piMode: Schema.optionalKey(Schema.Literals(["build", "plan"])),
 });
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
 
@@ -481,6 +483,7 @@ export interface ComposerThreadDraftState {
   modelSelectionExplicit?: boolean;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
+  piMode: "build" | "plan" | null;
 }
 
 export function composerDraftHasUserContent(
@@ -670,6 +673,7 @@ interface ComposerDraftStoreState {
     threadRef: ComposerThreadTarget,
     runtimeMode: RuntimeMode | null | undefined,
   ) => void;
+  setPiMode: (threadRef: ComposerThreadTarget, piMode: "build" | "plan" | null | undefined) => void;
   setInteractionMode: (
     threadRef: ComposerThreadTarget,
     interactionMode: ProviderInteractionMode | null | undefined,
@@ -908,6 +912,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   activeProvider: null,
   runtimeMode: null,
   interactionMode: null,
+  piMode: null,
 });
 
 function createEmptyThreadDraft(): ComposerThreadDraftState {
@@ -927,6 +932,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     activeProvider: null,
     runtimeMode: null,
     interactionMode: null,
+    piMode: null,
   };
 }
 
@@ -937,6 +943,7 @@ function composerDraftContent({
   modelSelectionExplicit: _modelSelectionExplicit,
   runtimeMode: _runtimeMode,
   interactionMode: _interactionMode,
+  piMode: _piMode,
   ...content
 }: ComposerThreadDraftState) {
   return content;
@@ -2501,6 +2508,7 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
+      ...(draft.piMode ? { piMode: draft.piMode } : {}),
     };
     persistedDraftsByThreadKey[threadKey] = persistedDraft;
   }
@@ -2779,6 +2787,7 @@ function toHydratedThreadDraft(
     ...(persistedDraft.modelSelectionExplicit ? { modelSelectionExplicit: true } : {}),
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
+    piMode: persistedDraft.piMode ?? null,
   };
 }
 
@@ -3570,6 +3579,26 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             } else {
               nextDraftsByThreadKey[threadKey] = nextDraft;
             }
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
+        setPiMode: (threadRef, piMode) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
+          if (threadKey.length === 0) {
+            return;
+          }
+          const nextPiMode = piMode === "build" || piMode === "plan" ? piMode : null;
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey];
+            if (!existing && nextPiMode === null) {
+              return state;
+            }
+            const base = existing ?? createEmptyThreadDraft();
+            if (base.piMode === nextPiMode) {
+              return state;
+            }
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            nextDraftsByThreadKey[threadKey] = { ...base, piMode: nextPiMode };
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
@@ -4776,7 +4805,7 @@ export function useComposerDraftModelState(
 // Mode-only promotion opens a thread without launching model work.
 const quietDraftPromotions = new Set<string>();
 
-export function setQuietDraftPromotion(threadRef: ScopedThreadRef, quiet: boolean): void {
+function setQuietDraftPromotion(threadRef: ScopedThreadRef, quiet: boolean): void {
   const key = scopedThreadKey(threadRef);
   if (quiet) quietDraftPromotions.add(key);
   else quietDraftPromotions.delete(key);

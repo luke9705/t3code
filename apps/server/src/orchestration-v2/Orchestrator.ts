@@ -660,6 +660,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.active.reorder":
     case "thread.tag.set":
     case "thread.visit":
+    case "thread.pi-mode.set":
     case "thread.mark-unread":
     case "thread.metadata.update":
     case "thread.pull-request.link":
@@ -4191,6 +4192,61 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(opens ? { opens } : {}),
       },
     });
+  });
+
+  // Pi's /plan is an extension command: Pi applies it on receipt without starting a turn, so
+  // the mode can change while a run is active. The projection records it for late readers.
+  const dispatchThreadPiModeSet = Effect.fn("orchestrationV2.dispatch.threadPiModeSet")(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "thread.pi-mode.set" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    const { thread, providerThreads } = yield* projectionStore
+      .getThreadRecords(command.threadId, ["providerThreads"])
+      .pipe(
+        Effect.mapError(
+          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+        ),
+      );
+    if (thread.deletedAt !== null) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} is deleted.`,
+      });
+    }
+    const occurredAt = yield* DateTime.now;
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.pi-mode-updated",
+      threadId: command.threadId,
+      providerInstanceId: thread.providerInstanceId,
+      occurredAt,
+      // Not activity: updatedAt stays, so the sidebar order is unchanged.
+      payload: { ...thread, savedPiMode: command.piMode },
+    });
+    if (thread.savedPiMode === command.piMode) return;
+    const providerThread = providerThreads.find(
+      (candidate) => candidate.id === thread.activeProviderThreadId,
+    );
+    const providerSessionId = providerThread?.providerSessionId;
+    if (!providerSessionId) return;
+    yield* Ref.update(effects, (existing) => [
+      ...existing,
+      {
+        id: `effect:${command.commandId}:provider-session.apply-pi-mode`,
+        commandId: command.commandId,
+        threadId: command.threadId,
+        request: {
+          type: "provider-session.apply-pi-mode",
+          providerSessionId,
+          providerThreadId: providerThread.id,
+          piMode: command.piMode,
+        },
+      } satisfies PendingOrchestrationEffectV2,
+    ]);
   });
 
   // Recheck under the lock after reading the host. Record the watch first so wake events carry it.
@@ -15877,6 +15933,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       case "thread.visit":
         yield* dispatchThreadVisit(command, events);
+        break;
+      case "thread.pi-mode.set":
+        yield* dispatchThreadPiModeSet(command, events, effects);
         break;
       case "thread.auto-settle": {
         // Recheck live state; changes and explicit overrides take precedence over the sweep snapshot.

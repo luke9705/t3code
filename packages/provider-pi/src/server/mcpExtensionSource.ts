@@ -351,9 +351,9 @@ function registerFooterMetrics(pi: ExtensionAPI) {
       ? Math.max(0, Math.min(100, (cacheRead - baseline.cacheRead) / promptDelta * 100)).toFixed(1) + "%"
       : "~";
     const ttft = firstTokenCount ? (firstTokenSum / firstTokenCount / 1000).toFixed(1) + "s" : "~";
+    const tps = duration ? (output * 1000 / duration).toFixed(1) + " tok/s" : "~";
     const label = duration || firstTokenCount || promptDelta > 0
-      ? [duration ? "TPS " + (output * 1000 / duration).toFixed(1) + " tok/s" : undefined,
-        "TTFT " + ttft, "Cache " + cache].filter(Boolean).join(" · ")
+      ? "TPS " + tps + " · TTFT " + ttft + " · Cache " + cache
       : undefined;
     if (label !== lastStatus) {
       lastStatus = label;

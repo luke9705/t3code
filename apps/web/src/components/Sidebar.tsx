@@ -1463,6 +1463,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const orderedRowKeys = [...draftIdByRowKey.keys(), ...orderedThreadKeys];
   const routeDraftRowKey = `draft:${routeDraftIdForRows}`;
   const routeRowKey = draftIdByRowKey.has(routeDraftRowKey) ? routeDraftRowKey : routeRowThreadKey;
+  const [pendingRow, setPendingRow] = useState<{ key: string } | null>(null);
+  const pendingRowRef = useRef<{
+    key: string;
+    traversal?: { modifier: "ctrlKey" | "metaKey"; origin: string };
+  } | null>(null);
+  const activeRowKey = pendingRow?.key ?? routeRowKey;
 
   const jumpLabelByKey = (() => {
     const mapping = new Map<string, string>();
@@ -1475,6 +1481,30 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     return mapping;
   })();
 
+  const navigateFromSidebar = async (rowKey: string, navigate: () => Promise<void>) => {
+    const intent = { key: rowKey };
+    pendingRowRef.current = intent;
+    const showBeforeNavigation =
+      !isMobile && rowKey !== routeRowKey && document.visibilityState === "visible";
+    setPendingRow(showBeforeNavigation ? intent : null);
+    try {
+      if (showBeforeNavigation) {
+        const source = router.history.location.href;
+        // Give the pending highlight a paint before the new chat can do layout work.
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+        if (pendingRowRef.current !== intent || router.history.location.href !== source) return;
+      }
+      await navigate();
+    } finally {
+      if (pendingRowRef.current === intent) {
+        pendingRowRef.current = null;
+        setPendingRow(null);
+      }
+    }
+  };
+
   const navigateToThread = (threadRef: ScopedThreadRef) => {
     if (useThreadSelectionStore.getState().selectedThreadKeys.size > 0) {
       clearSelection();
@@ -1483,10 +1513,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (isMobile) {
       setOpenMobile(false);
     }
-    return router.navigate({
-      to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(threadRef),
-    });
+    return navigateFromSidebar(scopedThreadKey(threadRef), () =>
+      router.navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(threadRef),
+      }),
+    );
   };
 
   const handleThreadFileDrop = async (threadRef: ScopedThreadRef, files: File[]) => {
@@ -1516,7 +1548,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (isMobile) {
       setOpenMobile(false);
     }
-    void router.navigate({ to: "/draft/$draftId", params: { draftId } });
+    void navigateFromSidebar(`draft:${draftId}`, () =>
+      router.navigate({ to: "/draft/$draftId", params: { draftId } }),
+    );
   };
 
   const clearThreadSearch = () => {
@@ -2953,6 +2987,19 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to window keydown for thread navigation shortcuts using the current thread list
   useEffect(() => {
+    const resolveRowNavigation = (key: string) => {
+      const draftId = draftIdByRowKey.get(key);
+      if (draftId !== undefined) return () => navigateToDraft(draftId);
+      const thread = threadByKey.get(key);
+      return thread
+        ? () => navigateToThread(scopeThreadRef(thread.environmentId, thread.id))
+        : null;
+    };
+    const cancelTraversal = () => {
+      if (!pendingRowRef.current?.traversal) return;
+      pendingRowRef.current = null;
+      setPendingRow(null);
+    };
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || isCommandPaletteOpen() || isModelPickerOpen()) {
         return;
@@ -2961,43 +3008,66 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         platform: navigator.platform,
         context: threadShortcutContext(routeThreadRef),
       });
-      const navigateToRowKey = (targetRowKey: string | null) => {
-        if (!targetRowKey) return false;
-        const targetDraftId = draftIdByRowKey.get(targetRowKey);
-        const targetThread = threadByKey.get(targetRowKey);
-        if (targetDraftId === undefined && !targetThread) return false;
-        event.preventDefault();
-        event.stopPropagation();
-        if (targetDraftId !== undefined) navigateToDraft(targetDraftId);
-        else if (targetThread)
-          navigateToThread(scopeThreadRef(targetThread.environmentId, targetThread.id));
-        return true;
-      };
-      const traversalDirection = threadTraversalDirectionFromCommand(command);
-      if (traversalDirection !== null) {
-        navigateToRowKey(
-          resolveAdjacentThreadId({
-            threadIds: orderedRowKeys,
-            currentThreadId: routeRowKey,
-            direction: traversalDirection,
-          }),
-        );
-        return;
-      }
+      const direction = threadTraversalDirectionFromCommand(command);
       const jumpIndex = threadJumpIndexFromCommand(command ?? "");
-      if (jumpIndex === null) return;
-      navigateToRowKey(orderedRowKeys[jumpIndex] ?? null);
+      const key =
+        direction !== null
+          ? resolveAdjacentThreadId({
+              threadIds: orderedRowKeys,
+              currentThreadId: pendingRowRef.current?.key ?? routeRowKey,
+              direction,
+            })
+          : jumpIndex === null
+            ? null
+            : (orderedRowKeys[jumpIndex] ?? null);
+      if (key === null) return;
+      const navigate = resolveRowNavigation(key);
+      if (!navigate) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const modifier = event.ctrlKey ? "ctrlKey" : event.metaKey ? "metaKey" : null;
+      if (direction !== null && modifier !== null && !isMobile) {
+        const intent: NonNullable<typeof pendingRowRef.current> = {
+          key,
+          traversal: { modifier, origin: router.history.location.href },
+        };
+        pendingRowRef.current = intent;
+        setPendingRow(intent);
+      } else {
+        void navigate();
+      }
+    };
+    const onWindowKeyUp = (event: KeyboardEvent) => {
+      const intent = pendingRowRef.current;
+      if (!intent?.traversal || event[intent.traversal.modifier]) return;
+      if (intent.key !== routeRowKey && intent.traversal.origin === router.history.location.href) {
+        const navigate = resolveRowNavigation(intent.key);
+        if (navigate) {
+          void navigate();
+          return;
+        }
+      }
+      cancelTraversal();
     };
     window.addEventListener("keydown", onWindowKeyDown);
-    return () => window.removeEventListener("keydown", onWindowKeyDown);
+    window.addEventListener("keyup", onWindowKeyUp, true);
+    window.addEventListener("blur", cancelTraversal);
+    return () => {
+      window.removeEventListener("keydown", onWindowKeyDown);
+      window.removeEventListener("keyup", onWindowKeyUp, true);
+      window.removeEventListener("blur", cancelTraversal);
+    };
   }, [
     draftIdByRowKey,
+    isMobile,
     keybindings,
     navigateToDraft,
     navigateToThread,
     orderedRowKeys,
+    pendingRowRef,
     routeRowKey,
     routeThreadRef,
+    router,
     threadByKey,
   ]);
 
@@ -3058,6 +3128,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       <SidebarContent
         ref={sidebarContentRef}
         className="min-h-full"
+        data-sidebar-thread-pending={activeRowKey !== routeRowKey ? "" : undefined}
         fixedHeader={
           <SidebarGroup className="z-[1]">
             <SidebarThreadHeader
@@ -3550,7 +3621,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 : null
                             }
                             wokeAt={threadWokeAt(thread, { now: snoozeNow })}
-                            isActive={routeRowThreadKey === threadKey}
+                            isActive={activeRowKey === threadKey}
                             revealRef={
                               routeRowThreadKey === threadKey ? revealActiveRow : undefined
                             }
@@ -3610,6 +3681,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           projectByKey={projectByKey}
                           projectDisplayNameByKey={projectDisplayNameByKey}
                           routeDraftId={routeDraftIdForRows}
+                          activeDraftId={
+                            activeRowKey ? (draftIdByRowKey.get(activeRowKey) ?? null) : null
+                          }
                           onNavigateToDraft={navigateToDraft}
                           onDraftContextMenu={handleDraftContextMenu}
                         />,

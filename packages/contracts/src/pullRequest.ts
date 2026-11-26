@@ -403,6 +403,7 @@ export const PULL_REQUEST_LIST_PROJECT_LIMIT = 100;
 
 export const PullRequestListInput = Schema.Struct({
   state: PullRequestListState,
+  githubAccount: Schema.optional(Schema.Boolean),
   involvement: Schema.optional(PullRequestInvolvement),
   filters: Schema.optional(PullRequestListFilters),
   projectId: Schema.optional(ProjectId),

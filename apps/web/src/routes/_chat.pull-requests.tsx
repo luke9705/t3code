@@ -33,7 +33,7 @@ export const Route = createFileRoute("/_chat/pull-requests")({
     involvement:
       raw.involvement === "reviewing" || raw.involvement === "authored" ? raw.involvement : "all",
     state:
-      raw.state === "closed" || raw.state === "merged" || raw.state === "all" ? raw.state : "open",
+      raw.state === "closed" || raw.state === "merged" || raw.state === "open" ? raw.state : "all",
     ...(SORT_OPTIONS.some((option) => option.value === raw.sort)
       ? { sort: raw.sort as PullRequestListSort }
       : {}),

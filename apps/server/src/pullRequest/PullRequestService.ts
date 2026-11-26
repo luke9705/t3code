@@ -1408,12 +1408,38 @@ export const make = Effect.gen(function* () {
     const involvement = input.involvement ?? "all";
     const epochAtStart = epochCounter;
     const continuation = yield* decodeCursors(input.cursors);
-    const {
-      supported: projects,
-      unimplemented,
-      viewerRoots,
-      refinedProjectIdsByHost,
-    } = yield* listWorkspaceProjects(input);
+    const workspace = yield* listWorkspaceProjects(input);
+    const { unimplemented, viewerRoots, refinedProjectIdsByHost } = workspace;
+    const githubHost = "github.com";
+    const accountKey = listCursorKey(githubHost, "@account");
+    const accountApi =
+      input.githubAccount === true &&
+      input.projectId === undefined &&
+      input.projectIds === undefined &&
+      (input.host === undefined || input.host.toLowerCase() === githubHost)
+        ? registry.get(SourceControlProviderKind.make("github"))
+        : null;
+    const accountAnchor =
+      workspace.supported.find(({ host }) => host === githubHost)?.project ?? workspace.projects[0];
+    const accountProject: SupportedProject | undefined =
+      accountApi?.listChangeRequestsAcross === undefined || accountAnchor === undefined
+        ? undefined
+        : {
+            cursorKey: accountKey,
+            project: accountAnchor,
+            api: withRateLimitBackoff(accountApi, githubHost, rateLimits),
+            kind: accountApi.kind,
+            repository: "@account",
+            host: githubHost,
+            remote: `https://${githubHost}`,
+            repositoryKey: null,
+          };
+    const projects =
+      input.githubAccount === true
+        ? accountProject === undefined
+          ? []
+          : [accountProject]
+        : workspace.supported;
     const projectCounts = new Map<string, number>();
     for (const { host } of projects) {
       projectCounts.set(host, (projectCounts.get(host) ?? 0) + 1);
@@ -1440,16 +1466,18 @@ export const make = Effect.gen(function* () {
           detail: result.error === null ? null : providerDetail(requirementOf, result.error),
         };
       }),
-      ...[...unimplemented].map(([host, { kind, projectCount }]) => ({
-        host,
-        kind,
-        searchesOnHost: false,
-        actions: [],
-        projectCount,
-        projectIds: refinedProjectIdsByHost.get(host),
-        configured: false,
-        detail: "This host cannot be browsed here yet.",
-      })),
+      ...(input.githubAccount === true ? [] : [...unimplemented]).map(
+        ([host, { kind, projectCount }]) => ({
+          host,
+          kind,
+          searchesOnHost: false,
+          actions: [],
+          projectCount,
+          projectIds: refinedProjectIdsByHost.get(host),
+          configured: false,
+          detail: "This host cannot be browsed here yet.",
+        }),
+      ),
     ];
 
     const selected =
@@ -1462,7 +1490,10 @@ export const make = Effect.gen(function* () {
       .map(({ project, repository }) => ({
         projectId: project.id,
         projectTitle: project.title,
-        message: `${repository} could not be read.`,
+        message:
+          repository === "@account"
+            ? "GitHub account pull requests could not be read."
+            : `${repository} could not be read.`,
       }));
     if (readable.length === 0) {
       const listResult: PullRequestListResult = {
@@ -1689,6 +1720,94 @@ export const make = Effect.gen(function* () {
         Effect.catch(separately),
       );
     };
+
+    const readAccount = Effect.fn("PullRequestService.readAccountList")(function* (
+      project: SupportedProject,
+    ) {
+      const read = project.api.listChangeRequestsAcross!;
+      const viewer = viewers[project.host]!;
+      const cursor = cursorOf(project);
+      const boundaryPrefix = accountKey + " ";
+      const { value: page, observedAt } = yield* read({
+        cwd: project.project.workspaceRoot,
+        host: project.host,
+        repositories: [],
+        githubAccount: true,
+        state: input.state,
+        involvement,
+        viewer,
+        limit,
+        query: input.query,
+        filters: input.filters,
+        ...(cursor === undefined
+          ? {}
+          : {
+              cursor: {
+                updatedBefore: cursor.updatedBefore,
+                delivered: cursor.delivered,
+                seenAt: [...(continuation ?? [])].flatMap(([key, repoCursor]) =>
+                  key.startsWith(boundaryPrefix) &&
+                  repoCursor.updatedBefore === cursor.updatedBefore
+                    ? repoCursor.seenAt.map((number) => ({
+                        repository: key.slice(boundaryPrefix.length),
+                        number,
+                      }))
+                    : [],
+                ),
+              },
+            }),
+      }).pipe(observeRead, Effect.mapError(toPullRequestError("list")));
+      const checkouts = new Map(
+        workspace.supported
+          .filter(({ host }) => host === project.host)
+          .map((checkout) => [checkout.repository.toLowerCase(), checkout]),
+      );
+      const entries = page.items
+        .filter((item) => matchesRowFilters(item, input.filters, viewer))
+        .map((item) =>
+          toEntry({
+            project: checkouts.get(item.repository.toLowerCase()) ?? {
+              ...project,
+              repository: item.repository,
+            },
+            item,
+            viewer,
+            observedAt,
+          }),
+        );
+      const nextCursors: Record<string, string> = {};
+      if (page.truncated && page.items.length > 0) {
+        const boundary = page.items.reduce(
+          (oldest, item) => (item.updatedAt < oldest ? item.updatedAt : oldest),
+          page.items[0]!.updatedAt,
+        );
+        nextCursors[accountKey] = listCursorAt(cursor, boundary, [], page.items.length);
+        if (cursor?.updatedBefore === boundary) {
+          for (const [key, previous] of continuation ?? []) {
+            if (key.startsWith(boundaryPrefix) && previous.updatedBefore === boundary) {
+              nextCursors[key] = listCursorAt(previous, boundary, [], 0);
+            }
+          }
+        }
+        const boundaryItems = Map.groupBy(
+          page.items.filter((item) => item.updatedAt === boundary),
+          (item) => item.repository.toLowerCase(),
+        );
+        for (const [repository, items] of boundaryItems) {
+          const key = boundaryPrefix + repository;
+          nextCursors[key] = listCursorAt(continuation?.get(key), boundary, items, 0);
+        }
+      }
+      return {
+        viewers: viewers as PullRequestListResult["viewers"],
+        providers,
+        entries,
+        errors: [],
+        truncated: Object.keys(nextCursors).length > 0,
+        nextCursors,
+      } satisfies PullRequestListResult;
+    });
+    if (accountProject !== undefined) return yield* readAccount(accountProject);
 
     const together = new Map<string, Array<SupportedProject>>();
     const separate: Array<SupportedProject> = [];
@@ -3273,6 +3392,7 @@ export const make = Effect.gen(function* () {
         limit,
         query,
         cursorEntries,
+        githubAccount,
       ] = JSON.parse(key) as [
         number,
         string,
@@ -3284,9 +3404,11 @@ export const make = Effect.gen(function* () {
         number | null,
         string | null,
         ReadonlyArray<[string, string]> | null,
+        boolean,
       ];
       return listUncached({
         state,
+        ...(githubAccount ? { githubAccount } : {}),
         ...(involvement === null ? {} : { involvement }),
         ...(filters === null ? {} : { filters: filtersOfKey(filters) }),
         ...(projectId === null ? {} : { projectId }),
@@ -3325,6 +3447,7 @@ export const make = Effect.gen(function* () {
       input.cursors === undefined
         ? null
         : Object.entries(input.cursors).toSorted(([left], [right]) => left.localeCompare(right)),
+      input.githubAccount === true,
     ]);
     // A replacement reader can join a lookup still finishing its previous reader's cancellation.
     return Cache.get(listCache, key).pipe(

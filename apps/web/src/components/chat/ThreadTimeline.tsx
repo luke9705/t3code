@@ -66,6 +66,7 @@ export function ThreadTimeline({
     <MessagesTimeline
       {...timelineProps}
       cachedPaintOnly={showingCachedEntries}
+      loadingMessages={detailLoading && displayedEntries.length === 0}
       syncing={syncing}
       timelineEntries={displayedEntries}
       timelineCacheKey={activeThreadKey}

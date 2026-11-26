@@ -523,6 +523,7 @@ export function useEnvironmentSpeechInput(input: HookInput) {
           (cloudProvider !== undefined ||
             (status?.prepared === prepared && status.value?.supported !== false)));
   return {
+    configured: grantId !== null,
     available:
       destinationReady &&
       !busyElsewhere &&

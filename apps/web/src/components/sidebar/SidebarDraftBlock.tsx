@@ -259,6 +259,7 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectByKey: ReadonlyMap<string, EnvironmentProject>;
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   routeDraftId: string | null;
+  activeDraftId?: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;
   onDraftContextMenu: (
     draftId: DraftId,
@@ -297,7 +298,10 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
             terminalLabel={draftTerminalLabel(session, props.terminalLabels)}
             project={props.projectByKey.get(projectKey) ?? null}
             projectDisplayName={props.projectDisplayNameByKey.get(projectKey) ?? null}
-            isActive={draftId === props.routeDraftId}
+            isActive={
+              draftId ===
+              (props.activeDraftId === undefined ? props.routeDraftId : props.activeDraftId)
+            }
             jumpLabel={props.jumpLabelByDraftId?.get(draftId) ?? null}
             onNavigate={props.onNavigateToDraft}
             onDiscard={discardComposerDraft}
