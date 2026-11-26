@@ -1318,7 +1318,9 @@ it.effect("admits provider and OAuth client credentials and points only clients 
         (span) => span.name === "McpHttpServer.authenticateRequest",
       );
       expect(authSpan).toBeDefined();
-      expect(JSON.stringify(Object.fromEntries(authSpan?.attributes ?? []))).not.toContain(token);
+      expect(JSON.stringify(Object.fromEntries(authSpan?.attributes ?? []))).not.toContain(
+        providerToken,
+      );
       expect(traced.order.slice(0, traced.order.indexOf(`start ${toolSpan?.spanId}`))).toContain(
         `end ${authSpan?.spanId}`,
       );
