@@ -4225,7 +4225,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // Not activity: updatedAt stays, so the sidebar order is unchanged.
       payload: { ...thread, savedPiMode: command.piMode },
     });
-    if (thread.savedPiMode === command.piMode) return;
+    // The saved mode can lag behind native Pi commands. Let live Pi handle repeated requests.
     const providerThread = providerThreads.find(
       (candidate) => candidate.id === thread.activeProviderThreadId,
     );

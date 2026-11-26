@@ -6,14 +6,18 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSessionId,
+  ProviderThreadId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { DispatchModeLimit } from "./DispatchModeLimit.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -29,20 +33,23 @@ const adapter = {
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
   openSession: () => Effect.die("No provider process needed for metadata commands"),
 } as ProviderAdapter.ProviderAdapterV2["Service"];
+const piInstanceId = ProviderInstanceId.make("pi");
+const piDriver = ProviderDriverKind.make("pi");
+const piAdapter = { ...adapter, instanceId: piInstanceId, driver: piDriver };
 const layerDatabase = SqlitePersistence.layerMemory;
 const layerTest = Layer.mergeAll(
   layerDatabase,
   ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
   ProviderReplayHarness.layerWithRegistry(
     { name: "dispatch-mode-limit" },
-    ProviderAdapterRegistry.layerFromAdapters([adapter]),
+    ProviderAdapterRegistry.layerFromAdapters([adapter, piAdapter]),
     { databaseLayer: layerDatabase, runEffectWorker: false },
   ),
 );
 
 const supervised = { runtimeMode: "approval-required", interactionMode: "default" } as const;
 
-const createThread = (threadId: ThreadId) =>
+const createThread = (threadId: ThreadId, modelSelection = { instanceId, model: "gpt-5" }) =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     yield* orchestrator.dispatch({
@@ -51,7 +58,7 @@ const createThread = (threadId: ThreadId) =>
       threadId,
       projectId: ProjectId.make("project:dispatch-mode-limit"),
       title: "Before",
-      modelSelection: { instanceId, model: "gpt-5" },
+      modelSelection,
       ...supervised,
       branch: null,
       worktreePath: null,
@@ -125,6 +132,75 @@ it.layer(layerTest)("DispatchModeLimit", (it) => {
         Effect.flatMap((projections) => projections.getThreadShell(threadId)),
       );
       assert.isNotNull(shell);
+    }),
+  );
+
+  it.effect("forwards a Pi mode request even when the persisted mode already matches", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const threadId = ThreadId.make("thread:pi-mode-retry");
+      const providerThreadId = ProviderThreadId.make("provider-thread:pi-mode-retry");
+      const providerSessionId = ProviderSessionId.make("provider-session:pi-mode-retry");
+      yield* createThread(threadId, { instanceId: piInstanceId, model: "openai/gpt-5" });
+      const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+      const occurredAt = yield* DateTime.now;
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("event:pi-mode-retry:provider-thread"),
+            type: "provider-thread.updated",
+            threadId,
+            driver: piDriver,
+            providerInstanceId: piInstanceId,
+            occurredAt,
+            payload: {
+              id: providerThreadId,
+              driver: piDriver,
+              providerInstanceId: piInstanceId,
+              providerSessionId,
+              appThreadId: threadId,
+              ownerNodeId: null,
+              nativeThreadRef: null,
+              nativeConversationHeadRef: null,
+              status: "idle",
+              firstRunOrdinal: 1,
+              lastRunOrdinal: 1,
+              handoffIds: [],
+              forkedFrom: null,
+              createdAt: occurredAt,
+              updatedAt: occurredAt,
+            },
+          },
+          {
+            id: EventId.make("event:pi-mode-retry:saved-mode"),
+            type: "thread.pi-mode-updated",
+            threadId,
+            providerInstanceId: piInstanceId,
+            occurredAt,
+            payload: { ...thread, activeProviderThreadId: providerThreadId, savedPiMode: "plan" },
+          },
+        ],
+      });
+      const commandId = CommandId.make("pi-mode-retry");
+      yield* orchestrator.dispatch({
+        type: "thread.pi-mode.set",
+        commandId,
+        threadId,
+        piMode: "plan",
+      });
+      assert.deepEqual(
+        Option.getOrUndefined(
+          yield* outbox.get(`effect:${commandId}:provider-session.apply-pi-mode`),
+        )?.request,
+        {
+          type: "provider-session.apply-pi-mode",
+          providerSessionId,
+          providerThreadId,
+          piMode: "plan",
+        },
+      );
     }),
   );
 
