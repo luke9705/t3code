@@ -4018,7 +4018,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             ? gt("Choose a project above to start a thread")
                             : showProviderUnavailable
                               ? gt("Enable a provider in Settings to send a message")
-                              : (offeredPromptSuggestion ?? "")
+                              : (offeredPromptSuggestion ?? gt("What are we working on?"))
                     }
                     placeholderSuffix={
                       offeredPromptSuggestion !== null ? (
