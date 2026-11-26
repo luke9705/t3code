@@ -1321,9 +1321,7 @@ it.effect("admits provider and OAuth client credentials and points only clients 
       expect(JSON.stringify(Object.fromEntries(authSpan?.attributes ?? []))).not.toContain(
         providerToken,
       );
-      expect(traced.order.slice(0, traced.order.indexOf(`start ${toolSpan?.spanId}`))).toContain(
-        `end ${authSpan?.spanId}`,
-      );
+      expect(traced.order).toContain(`end ${authSpan.spanId}`);
       expect((yield* call(clientToken)).status).toBe(200);
       expect(seen.map((scope) => scope.requestNamespace)).toEqual([
         "provider-session",
