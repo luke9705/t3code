@@ -7,14 +7,13 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import {
   DEFAULT_CLIENT_SETTINGS,
   EnvironmentId,
-  type LocalApi,
   ProjectId,
   ThreadId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { isMacPlatform } from "@t3tools/shared/keybindings";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, fakeTimers, render } from "../../test/render";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -28,7 +27,7 @@ import { useProjects, useServerConfigs, useQuietThreadShells } from "../state/en
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
-import { readLocalApi } from "../localApi";
+import { dismissContextMenu } from "../contextMenuFallback";
 import type { Project } from "../types";
 import Sidebar from "./Sidebar";
 import { THREAD_JUMP_HINT_SHOW_DELAY_MS } from "./Sidebar.logic";
@@ -46,7 +45,6 @@ vi.mock("../hooks/useThreadRouteTarget", { spy: true });
 vi.mock("./sidebar/SidebarThreadRow", { spy: true });
 vi.mock("../state/session", { spy: true });
 vi.mock("../state/use-orchestration-command", { spy: true });
-vi.mock("../localApi", { spy: true });
 vi.mock(import("../state/server"), async (original) => {
   const { Atom } = await import("effect/reactivity");
   const { compileResolvedKeybindingsConfig } = await import("@t3tools/shared/keybindings");
@@ -381,12 +379,15 @@ describe("sidebar thread click", () => {
 });
 
 describe("sidebar thread menu", () => {
-  it("tells the menu whether the keyboard opened it", async () => {
+  it("uses the in-app menu for keyboard and pointer even with the desktop bridge", async () => {
+    using cleanup = new DisposableStack();
+    const showContextMenu = vi.fn().mockResolvedValue(null);
+    vi.stubGlobal("desktopBridge", { showContextMenu });
+    cleanup.defer(() => vi.unstubAllGlobals());
+    cleanup.defer(() => dismissContextMenu());
     const activeProject = project("active");
     const thread = threadShell(activeProject.id, 0);
     const threadRef = { environmentId: activeProject.environmentId, threadId: thread.id };
-    const show = vi.fn().mockResolvedValue(null);
-    vi.mocked(readLocalApi).mockReturnValue({ contextMenu: { show } } as unknown as LocalApi);
     vi.mocked(useProjects).mockReturnValue([activeProject]);
     vi.mocked(useQuietThreadShells).mockReturnValue([thread]);
     vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef });
@@ -411,11 +412,15 @@ describe("sidebar thread menu", () => {
     await expect.element(row).toBeInTheDocument();
     row.element().closest<HTMLElement>("[data-sidebar-row]")!.focus();
     await userEvent.keyboard("{Shift>}{F10}{/Shift}");
-    await vi.waitFor(() => expect(show).toHaveBeenCalledTimes(1));
-    expect(show.mock.lastCall?.[2]).toBe("keyboard");
+    const menu = page.getByRole("menu", { name: "Context menu" });
+    await expect.element(menu).toBeVisible();
+    expect(menu.element().contains(document.activeElement)).toBe(true);
+    await userEvent.keyboard("{Escape}");
+    await expect.element(menu).not.toBeInTheDocument();
+
     await userEvent.click(row, { button: "right" });
-    await vi.waitFor(() => expect(show).toHaveBeenCalledTimes(2));
-    expect(show.mock.lastCall?.[2]).toBe("mouse");
+    await expect.element(menu).toBeVisible();
+    expect(showContextMenu).not.toHaveBeenCalled();
   });
 });
 
