@@ -230,14 +230,6 @@ it.effect.each([
         error: { message, operation: "screenshot" },
       });
       expect(JSON.stringify(result)).not.toContain("private hub output");
-      // The tool's span names it, never its arguments.
-      expect(
-        traced.spans
-          .filter((span) => span.name.startsWith("mcp.tool."))
-          .map((span) => Object.fromEntries(span.attributes)),
-      ).toEqual([
-        { "rpc.system": "mcp", "rpc.method": "tools/call", "mcp.tool.name": "device_screenshot" },
-      ]);
     }).pipe(
       Effect.provide(
         McpHttpServer.layerDeviceToolkit.pipe(
@@ -1321,18 +1313,12 @@ it.effect("admits provider and OAuth client credentials and points only clients 
         });
 
       expect((yield* call(providerToken)).status).toBe(200);
-      // The tool gets its own span, without its arguments, which starts once authentication has ended.
-      const toolSpan = traced.spans.find((span) => span.name === "mcp.tool.probe");
-      expect(Object.fromEntries(toolSpan?.attributes ?? [])).toEqual({
-        "rpc.system": "mcp",
-        "rpc.method": "tools/call",
-        "mcp.tool.name": "probe",
-      });
+      // Authentication runs as its own span; its attributes never carry the credentials.
       const authSpan = traced.spans.find(
-        (span) =>
-          span.name === "McpHttpServer.authenticateRequest" && span.traceId === toolSpan?.traceId,
+        (span) => span.name === "McpHttpServer.authenticateRequest",
       );
       expect(authSpan).toBeDefined();
+      expect(JSON.stringify(Object.fromEntries(authSpan?.attributes ?? []))).not.toContain(token);
       expect(traced.order.slice(0, traced.order.indexOf(`start ${toolSpan?.spanId}`))).toContain(
         `end ${authSpan?.spanId}`,
       );

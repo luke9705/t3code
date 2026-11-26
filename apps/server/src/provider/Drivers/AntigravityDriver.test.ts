@@ -444,6 +444,7 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
           });
           expect(h.launches.at(-1)?.args).toEqual([
             "acp",
+            "--disable-telemetry",
             "--gemini-dir",
             h.profileDirectory,
             "--app-data-dir",
