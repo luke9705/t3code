@@ -1,3 +1,4 @@
+import type { RecordedPiEdit } from "@t3tools/client-runtime/state/thread-checkpoints";
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
 import type { SideThreadOpenIntent } from "@t3tools/client-runtime/side-thread";
 import type { ThreadRunSummary } from "@t3tools/client-runtime/state/models";
@@ -63,6 +64,8 @@ export interface TimelineRowSharedState {
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   workspaceRoot: string | undefined;
+  piRunIds?: ReadonlySet<RunId> | undefined;
+  recordedPiEdits?: ReadonlyMap<RunId, ReadonlyArray<RecordedPiEdit>> | undefined;
   skills: ReadonlyArray<ServerProviderSkill>;
   runs: ReadonlyArray<HandoffTimelineRun>;
   activeThreadEnvironmentId: EnvironmentId;

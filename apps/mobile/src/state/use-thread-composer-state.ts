@@ -7,7 +7,11 @@ import { readEnvironmentScope } from "./session";
 import { useAtomValue } from "@effect/atom-react";
 import { compactBeforeSendTokens } from "@t3tools/client-runtime/state/context-window";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
-import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
+import {
+  derivePiRunIds,
+  deriveRecordedPiEdits,
+  type ThreadCheckpointSummary,
+} from "@t3tools/client-runtime/state/thread-checkpoints";
 import { threadSteersDuringCompaction } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolvePendingHandoff } from "@t3tools/client-runtime/handoff";
 import {
@@ -25,7 +29,7 @@ import {
   deriveThreadRuntime,
   threadRuntimeHasInterruptibleRun,
 } from "@t3tools/client-runtime/state/thread-execution";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   CommandId,
@@ -273,10 +277,19 @@ export function useThreadComposerState(input: {
       messages: selectedThreadMessages,
     });
   }, [acknowledgedMessages, selectedThreadKey, selectedThreadSequence, selectedThreadMessages]);
-  const checkpointSummaries = useAtomValue(
+  const workspaceCheckpointSummaries = useAtomValue(
     selectedThreadDetailRef === null
       ? EMPTY_CHECKPOINT_SUMMARIES_ATOM
       : environmentThreadDetails.checkpointSummariesAtom(selectedThreadDetailRef),
+  );
+  const projection = selectedThreadProjection?.projection;
+  const piRunIds = useMemo(() => derivePiRunIds(projection), [projection]);
+  const recordedPiEdits = useMemo(
+    () => deriveRecordedPiEdits(projection, piRunIds),
+    [projection, piRunIds],
+  );
+  const checkpointSummaries = workspaceCheckpointSummaries.filter(
+    ({ runId }) => !piRunIds.has(runId),
   );
   // A thread whose creation has not delivered its turn yet: the prompt only
   // exists in the outbox, so it is appended to whatever the server has. The
@@ -295,6 +308,7 @@ export function useThreadComposerState(input: {
       attempts: selectedThreadAttempts,
       nodes: selectedThreadNodes,
       checkpointSummaries,
+      recordedPiEdits,
       cache: feedCache,
       resolve,
       locale,

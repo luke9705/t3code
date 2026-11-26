@@ -6,14 +6,20 @@ import { T, useGT, useMessages } from "gt-react";
 import { memo, use, useState } from "react";
 import { type ChatMessage, type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
-import { GitForkIcon, ReplyIcon } from "lucide-react";
+import { ChevronDownIcon, GitForkIcon, ReplyIcon } from "lucide-react";
 import { captureAssistantMessageOpening } from "~/lib/assistantTextSelection";
 import { responseContextRecord } from "~/lib/composerContextRecords";
 import { Button } from "../ui/button";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { useSyncLayout } from "@legendapp/list/react";
+import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
-import { checkpointFileTotals } from "@t3tools/client-runtime/state/thread-checkpoints";
+import {
+  checkpointFileTotals,
+  type RecordedPiEdit,
+} from "@t3tools/client-runtime/state/thread-checkpoints";
 import { ChangedFilesCard, type ChangedFilesGroup } from "./ChangedFilesTree";
 import {
   changedFileTotals,
@@ -53,6 +59,10 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
     row.projectedItem?.item.id,
   );
   const text = liveText ?? row.message.text;
+  const runId = row.message.runId;
+  const isPiRun = runId != null && ctx.piRunIds?.has(runId);
+  const recordedEdits = runId == null ? undefined : ctx.recordedPiEdits?.get(runId);
+  const edits = row.showAssistantMeta && !row.message.streaming ? recordedEdits : undefined;
   const messageText =
     text || (row.message.streaming || row.suppressEmptyResponse ? "" : gt("(empty response)"));
 
@@ -88,7 +98,11 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
             />
           </AssistantCitationSource>
         </div>
-        {ctx.onOpenTurnDiff ? (
+        {isPiRun ? (
+          edits && edits.length > 0 ? (
+            <RecordedPiChangedFiles edits={edits} />
+          ) : null
+        ) : ctx.onOpenTurnDiff ? (
           <AssistantChangedFilesSection
             turnSummary={row.assistantTurnDiffSummary}
             routeThreadKey={ctx.routeThreadKey}
@@ -112,6 +126,90 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
         ) : null}
       </div>
     </>
+  );
+}
+
+function RecordedPiChangedFiles({ edits }: { edits: ReadonlyArray<RecordedPiEdit> }) {
+  const { onOpenToolDiff } = use(TimelineRowCtx);
+  const gt = useGT();
+  const syncTimelineLayout = useSyncLayout();
+  const [open, setOpen] = useState(false);
+  const count = new Set(edits.map(({ path }) => path)).size;
+  const collapsible = count > 5;
+  const totals = edits.reduce(
+    (total, edit) => ({
+      additions: total.additions + edit.additions,
+      deletions: total.deletions + edit.deletions,
+    }),
+    { additions: 0, deletions: 0 },
+  );
+  const label = gt(
+    "{count, plural, one {{formattedCount} changed file} other {{formattedCount} changed files}}",
+    { count, formattedCount: count.toLocaleString() },
+  );
+  const header = (
+    <span className="flex min-w-0 flex-1 items-center gap-2 font-medium">
+      <span>{label}</span>
+      {hasNonZeroStat(totals) ? (
+        <DiffStatLabel {...totals} layout="inline" className="flex-row-reverse" />
+      ) : null}
+    </span>
+  );
+  const files =
+    !collapsible || open ? (
+      <div className="px-3 pb-2">
+        {edits.map((edit) => (
+          <div key={edit.itemId} className="flex min-w-0 items-center justify-between gap-2 py-1">
+            <span className="min-w-0 flex-1 break-all font-mono">{edit.path}</span>
+            {hasNonZeroStat(edit) ? (
+              <DiffStatLabel
+                additions={edit.additions}
+                deletions={edit.deletions}
+                layout="inline"
+                className="flex-row-reverse"
+              />
+            ) : null}
+            {onOpenToolDiff ? (
+              <Button size="xs" variant="outline" onClick={() => onOpenToolDiff(edit)}>
+                <T>Open diff</T>
+              </Button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    ) : null;
+  return (
+    <div
+      className="mt-4 rounded-lg bg-secondary text-xs dark:bg-input/20"
+      data-changed-files-state="recorded"
+    >
+      {collapsible ? (
+        <Collapsible
+          open={open}
+          onOpenChange={(nextOpen) => {
+            setOpen(nextOpen);
+            syncTimelineLayout();
+          }}
+        >
+          <CollapsibleTrigger
+            className="group flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-accent/60"
+            data-scroll-anchor-ignore
+          >
+            {header}
+            <ChevronDownIcon
+              aria-hidden
+              className="size-3.5 text-muted-foreground group-aria-expanded:rotate-180"
+            />
+          </CollapsibleTrigger>
+          <CollapsiblePanel animate={false}>{files}</CollapsiblePanel>
+        </Collapsible>
+      ) : (
+        <>
+          <div className="px-3 py-2">{header}</div>
+          {files}
+        </>
+      )}
+    </div>
   );
 }
 

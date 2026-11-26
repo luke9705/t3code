@@ -58,6 +58,7 @@ import {
 } from "@legendapp/list/react";
 import { type PendingApproval, type TimelineEntry } from "../../session-logic";
 import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
+import type { RecordedPiEdit } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { type ChatFileAttachment, type TurnDiffSummary } from "../../types";
 import {
   ArrowRightIcon,
@@ -271,6 +272,8 @@ interface MessagesTimelineProps {
   detailBehindShell?: boolean;
   runningRunId?: RunId | null;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
+  piRunIds?: ReadonlySet<RunId>;
+  recordedPiEdits?: ReadonlyMap<RunId, ReadonlyArray<RecordedPiEdit>>;
   routeThreadKey: string;
   displayThreadKey?: string;
   /** Off where another region already speaks the thread's status, like a subagent's bar. */
@@ -401,6 +404,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
   detailBehindShell = false,
   runningRunId = null,
   turnDiffSummaries,
+  piRunIds,
+  recordedPiEdits,
   routeThreadKey,
   displayThreadKey,
   announceTurnStatus = true,
@@ -1142,6 +1147,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     markdownCwd,
     resolvedTheme,
     workspaceRoot,
+    piRunIds,
+    recordedPiEdits,
     skills,
     runs,
     activeThreadEnvironmentId,

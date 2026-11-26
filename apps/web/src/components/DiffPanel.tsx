@@ -37,6 +37,7 @@ import { useFileContextMenuHandler } from "../fileContextMenu";
 import { type DraftId } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
 import { toolCallDiff } from "../lib/toolCallDiff";
+import { derivePiRunIds } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { useCheckpointDiff, useTurnItemDetail } from "~/state/queries";
 import { revisionedQuery } from "~/state/revisionedQuery";
 import { cn } from "~/lib/utils";
@@ -338,7 +339,9 @@ export default function DiffPanel({
     (threadFolderIsRepo ? null : (gitRepositories[0] ?? null));
   const gitCwd = gitRepository?.cwd ?? activeCwd;
   const isGitRepo = threadFolderIsRepo || gitRepository !== null;
-  const turnDiffSummaries = useThreadCheckpointSummaries(routeThreadRef);
+  const checkpointSummaries = useThreadCheckpointSummaries(routeThreadRef);
+  const piRunIds = derivePiRunIds(repositoryStructure?.projection);
+  const turnDiffSummaries = checkpointSummaries.filter(({ runId }) => !piRunIds.has(runId));
   const orderedTurnDiffSummaries = turnDiffSummaries.toSorted((left, right) => {
     if (left.checkpointTurnCount !== right.checkpointTurnCount) {
       return right.checkpointTurnCount - left.checkpointTurnCount;
@@ -353,12 +356,14 @@ export default function DiffPanel({
   // way into the panel lands on its latest turn.
   const turnDiffsOnly = !isGitRepo && hasRepositoryChanges;
   const diffSelection: DiffPanelSelection =
-    turnDiffsOnly &&
-    latestTurn !== undefined &&
-    storedDiffSelection.kind !== "turn" &&
-    storedDiffSelection.kind !== "tool-call"
-      ? { kind: "turn", turnId: latestTurn.runId, filePath: null, revealRequestId: 0 }
-      : storedDiffSelection;
+    storedDiffSelection.kind === "turn" && piRunIds.has(storedDiffSelection.turnId)
+      ? { kind: "branch", baseRef: null }
+      : turnDiffsOnly &&
+          latestTurn !== undefined &&
+          storedDiffSelection.kind !== "turn" &&
+          storedDiffSelection.kind !== "tool-call"
+        ? { kind: "turn", turnId: latestTurn.runId, filePath: null, revealRequestId: 0 }
+        : storedDiffSelection;
   const rememberedBaseRef = useDiffPanelStore((state) =>
     selectThreadBranchBaseRef(state, routeThreadRef),
   );

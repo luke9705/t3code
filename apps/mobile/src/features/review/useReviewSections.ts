@@ -4,7 +4,10 @@ import { Atom } from "effect/reactivity";
 import { useMemo } from "react";
 import { msg, useMessages } from "gt-react-native";
 
-import { deriveThreadCheckpointSummaries } from "@t3tools/client-runtime/state/thread-checkpoints";
+import {
+  derivePiRunIds,
+  deriveThreadCheckpointSummaries,
+} from "@t3tools/client-runtime/state/thread-checkpoints";
 import type { EnvironmentId, ReviewDiffPreviewSource, ThreadId } from "@t3tools/contracts";
 
 import { useCheckpointDiff } from "../../state/queries";
@@ -95,8 +98,13 @@ export function useReviewSections(input: {
       : NO_TURN_DIFFS_ATOM,
   );
 
+  const piRunIds = derivePiRunIds(selectedThread?.projection);
   const readyCheckpoints = getReadyReviewCheckpoints(
-    selectedThread === null ? [] : deriveThreadCheckpointSummaries(selectedThread.projection),
+    selectedThread === null
+      ? []
+      : deriveThreadCheckpointSummaries(selectedThread.projection).filter(
+          ({ runId }) => !piRunIds.has(runId),
+        ),
   );
   const checkpointBySectionId = new Map(
     readyCheckpoints.map((checkpoint) => [getReviewSectionIdForCheckpoint(checkpoint), checkpoint]),

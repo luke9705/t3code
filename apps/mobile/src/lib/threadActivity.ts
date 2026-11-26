@@ -4,7 +4,10 @@ import type {
 } from "@t3tools/client-runtime/state/thread-requests";
 import { linkRequestTargetName } from "@t3tools/client-runtime/link-request";
 import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
-import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
+import type {
+  RecordedPiEdit,
+  ThreadCheckpointSummary,
+} from "@t3tools/client-runtime/state/thread-checkpoints";
 import { turnHasChanges } from "@t3tools/client-runtime/state/thread-repositories";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import {
@@ -158,6 +161,7 @@ export interface ThreadFeedMessage {
   readonly updatedAt: string;
   readonly projectedItem?: OrchestrationV2ProjectedTurnItem;
   readonly checkpointSummary?: ThreadCheckpointSummary;
+  readonly recordedPiEdits?: ReadonlyArray<RecordedPiEdit>;
 }
 
 export interface LocalThreadMessage {
@@ -2464,6 +2468,7 @@ interface ThreadFeedBuild {
   readonly attempts: ReadonlyArray<OrchestrationV2RunAttempt> | undefined;
   readonly nodes: ReadonlyArray<OrchestrationV2ExecutionNode> | undefined;
   readonly checkpointSummaries: ReadonlyArray<ThreadCheckpointSummary> | undefined;
+  readonly recordedPiEdits: ReadonlyMap<RunId, ReadonlyArray<RecordedPiEdit>> | undefined;
   readonly foldedAnswerRunIdByMessageId: ReadonlyMap<string, RunId | null>;
   readonly delegatedChildrenByRun: ReadonlyMap<RunId, ReadonlySet<string>>;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
@@ -2550,6 +2555,7 @@ export function buildThreadFeed(
     readonly attempts?: ReadonlyArray<OrchestrationV2RunAttempt>;
     readonly nodes?: ReadonlyArray<OrchestrationV2ExecutionNode>;
     readonly checkpointSummaries?: ReadonlyArray<ThreadCheckpointSummary>;
+    readonly recordedPiEdits?: ReadonlyMap<RunId, ReadonlyArray<RecordedPiEdit>>;
     readonly cache?: ThreadFeedCache;
     readonly resolve?: MessageResolver;
     /** Keys the caches; text comes from `resolve`. */
@@ -2604,6 +2610,7 @@ export function buildThreadFeed(
     previous.attempts === options?.attempts &&
     previous.nodes === options?.nodes &&
     checkpointSummariesEqual(previous.checkpointSummaries, options?.checkpointSummaries) &&
+    previous.recordedPiEdits === options?.recordedPiEdits &&
     mapsEqual(previous.foldedAnswerRunIdByMessageId, foldedAnswerRunIdByMessageId) &&
     setMapsEqual(previous.delegatedChildrenByRun, delegatedChildrenByRun)
   ) {
@@ -2813,8 +2820,12 @@ export function buildThreadFeed(
     entries.map((entry) => {
       if (entry.type !== "message" || entry.message.role !== "assistant") return entry;
       const checkpointSummary = checkpointByMessageId.get(entry.message.id);
-      if (!checkpointSummary || checkpointSummary.runId !== entry.message.runId) return entry;
-      return { ...entry, message: { ...entry.message, checkpointSummary } };
+      if (checkpointSummary && checkpointSummary.runId === entry.message.runId) {
+        return { ...entry, message: { ...entry.message, checkpointSummary } };
+      }
+      const runId = entry.message.runId;
+      const recordedPiEdits = runId === null ? undefined : options?.recordedPiEdits?.get(runId);
+      return recordedPiEdits ? { ...entry, message: { ...entry.message, recordedPiEdits } } : entry;
     }),
     delegatedChildrenByRun,
     // Anchored messages shift entries away from their rows; such a build is not reused.
@@ -2837,6 +2848,7 @@ export function buildThreadFeed(
             attempts: options?.attempts,
             nodes: options?.nodes,
             checkpointSummaries: options?.checkpointSummaries,
+            recordedPiEdits: options?.recordedPiEdits,
             foldedAnswerRunIdByMessageId,
             delegatedChildrenByRun,
             feed,

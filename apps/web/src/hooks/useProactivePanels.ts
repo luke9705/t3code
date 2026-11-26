@@ -35,6 +35,7 @@ export function useProactivePanels(input: {
   readonly latestRun: { readonly runId: RunId; readonly status: string } | null;
   readonly latestRunSettled: boolean;
   readonly turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
+  readonly piRunIds?: ReadonlySet<RunId>;
   readonly isGitRepo: boolean | undefined;
   readonly linkedPullRequest: ThreadLinkedPullRequest | null;
   readonly hasLinkedPullRequestDetail: boolean;
@@ -54,6 +55,7 @@ export function useProactivePanels(input: {
     latestRun: activeLatestRun,
     latestRunSettled,
     turnDiffSummaries,
+    piRunIds,
     isGitRepo,
     linkedPullRequest: linkedThreadPullRequest,
     hasLinkedPullRequestDetail,
@@ -156,6 +158,7 @@ export function useProactivePanels(input: {
     const eligibleCompletion =
       proactivePanelsEnabled &&
       newlyCompletedTurnId !== null &&
+      !piRunIds?.has(newlyCompletedTurnId) &&
       !(
         proactivePullRequestsKey !== null &&
         (!pullRequestsCapabilityKnown || supportsPullRequests || pullRequestsSurfaceAvailable)
@@ -206,6 +209,7 @@ export function useProactivePanels(input: {
     threadKey,
     threadRef,
     turnDiffSummaries,
+    piRunIds,
     visiblePullRequestCount,
   ]);
 }

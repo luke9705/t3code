@@ -52,6 +52,10 @@ import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnviron
 import { useStableCallback } from "../hooks/useStableCallback";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
 import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
+import {
+  derivePiRunIds,
+  deriveRecordedPiEdits,
+} from "@t3tools/client-runtime/state/thread-checkpoints";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { resolveWorktreeRepositorySelection } from "@t3tools/client-runtime/state/thread-repositories";
@@ -1721,6 +1725,8 @@ export default function ChatView(props: ChatViewProps) {
     panelAnimationDurationMs,
   );
   const turnDiffSummaries = useThreadCheckpointSummaries(routeThreadDetailRef);
+  const piRunIds = derivePiRunIds(serverProjection);
+  const recordedPiEdits = deriveRecordedPiEdits(serverProjection, piRunIds);
   const availableRevertTurnCounts = deriveAvailableRevertTurnCounts(serverProjection);
   // A paged history window cannot identify the first loaded run as the thread start.
   const threadStartCheckpointAvailable =
@@ -2140,6 +2146,7 @@ export default function ChatView(props: ChatViewProps) {
     latestRun: activeLatestRun,
     latestRunSettled,
     turnDiffSummaries,
+    piRunIds,
     isGitRepo: gitStatusQuery.data?.isRepo,
     linkedPullRequest: linkedThreadPullRequest,
     hasLinkedPullRequestDetail,
@@ -3702,6 +3709,8 @@ export default function ChatView(props: ChatViewProps) {
                   )}
                   runningRunId={activeRunningTurnId}
                   turnDiffSummaries={turnDiffSummaries}
+                  piRunIds={piRunIds}
+                  recordedPiEdits={recordedPiEdits}
                   activeThreadEnvironmentId={
                     displayedThreadRef?.environmentId ?? activeThread.environmentId
                   }

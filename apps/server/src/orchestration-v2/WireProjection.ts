@@ -31,6 +31,29 @@ const MAX_ON_DEMAND_BYTES = 256 * 1024;
 const TRUNCATION_MARKER = "\n… output truncated for transport";
 const TRUNCATION_MARKER_BYTES = Buffer.byteLength(TRUNCATION_MARKER, "utf8");
 
+function recordedPiPatchStats(item: Extract<OrchestrationV2TurnItem, { type: "file_change" }>) {
+  const { diffStr } = item;
+  if (
+    item.nativeItemRef?.driver !== "pi" ||
+    item.status !== "completed" ||
+    item.additions !== undefined ||
+    item.deletions !== undefined ||
+    !diffStr ||
+    diffStr.endsWith(TRUNCATION_MARKER)
+  )
+    return {};
+  let additions = 0;
+  let deletions = 0;
+  let inHunk = false;
+  for (const line of diffStr.split("\n")) {
+    if (line.startsWith("@@ ")) inHunk = true;
+    else if (line.startsWith("diff --git ")) inHunk = false;
+    else if (inHunk && line.startsWith("+")) additions++;
+    else if (inHunk && line.startsWith("-")) deletions++;
+  }
+  return additions || deletions ? { additions, deletions } : {};
+}
+
 function truncateDetail(
   value: string | undefined,
   maxBytes = MAX_DETAIL_STRING_BYTES,
@@ -178,7 +201,7 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
       const { diffStr, oldStr: _old, newStr: _new, ...projected } = item;
       return item.status === "failed" && diffStr?.trim()
         ? { ...projected, diffStr: truncateDetail(diffStr) }
-        : projected;
+        : { ...projected, ...recordedPiPatchStats(item) };
     }
     case "subagent":
       return {

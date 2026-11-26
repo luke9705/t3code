@@ -2683,6 +2683,15 @@ function renderFeedEntry(
           onPressPreview={props.onPressPreview}
           onPlaybackStart={props.onPlaybackStart}
         />
+        {showAssistantMeta && !message.streaming && message.recordedPiEdits ? (
+          <View className="mt-2 rounded-lg bg-subtle p-2">
+            {Array.from(new Set(message.recordedPiEdits.map(({ path }) => path))).map((path) => (
+              <Text key={path} className="text-xs text-foreground-secondary">
+                {path}
+              </Text>
+            ))}
+          </View>
+        ) : null}
         {showAssistantMeta && message.checkpointSummary ? (
           <TurnDiffStat
             checkpoint={message.checkpointSummary}
