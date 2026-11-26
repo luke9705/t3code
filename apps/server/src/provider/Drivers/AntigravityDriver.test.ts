@@ -344,6 +344,7 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
         for (const launch of agentLaunches) {
           expect(launch.args).toEqual([
             "acp",
+            "--disable-telemetry",
             "--gemini-dir",
             h.profileDirectory,
             "--app-data-dir",

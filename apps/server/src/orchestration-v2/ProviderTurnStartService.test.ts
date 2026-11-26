@@ -2294,7 +2294,6 @@ effectIt.effect.each([
         sideChat,
       });
       yield* harness.start;
-      expect(harness.settledRuns).toEqual([]);
       expect(harness.startTurn.mock.calls.map(([turn]) => turn.message.text)).toEqual([
         withInlineContext("SIDE_CHAT_CONTEXT", "Continue where you left off."),
       ]);

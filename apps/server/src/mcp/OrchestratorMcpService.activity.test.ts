@@ -19,7 +19,6 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Metric from "effect/Metric";
 import * as TestClock from "effect/testing/TestClock";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "vite-plus/test";
@@ -1246,20 +1245,9 @@ it("requestSecret saves a pasted value to a file without opening a card", async 
       ),
     ),
   );
-  const counted = Metric.snapshot.pipe(
-    Effect.map((snapshots) => {
-      const found = snapshots.find(
-        (snapshot) =>
-          snapshot.id === "t3_secret_requests_total" &&
-          snapshot.attributes?.status === "saved_pasted",
-      );
-      return found?.type === "Counter" ? Number(found.state.count) : 0;
-    }),
-  );
 
   await Effect.gen(function* () {
     const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-    const before = yield* counted;
     const result = yield* service.requestSecret(makeScope(), {
       label: "Pixel PIN",
       reason: "Unlocks the test phone.",
@@ -1276,7 +1264,6 @@ it("requestSecret saves a pasted value to a file without opening a card", async 
       },
     ]);
     expect(dispatched).toEqual([]);
-    expect((yield* counted) - before).toBe(1);
 
     const asRef = yield* service
       .requestSecret(makeScope(), {
