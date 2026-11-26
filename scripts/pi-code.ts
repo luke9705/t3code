@@ -24,7 +24,7 @@ const origin = `http://${host}:${webPort}`;
 const node = NodeChildProcess.execSync("command -v node", { encoding: "utf8" }).trim();
 const vp = NodePath.join(repoRoot, "node_modules", ".bin", "vp");
 
-const modes = ["dev", "start", "ship", "stop", "status"] as const;
+const modes = ["desktop", "desktop:build", "dev", "start", "ship", "stop", "status"] as const;
 type Mode = (typeof modes)[number];
 const mode = process.argv[2] as Mode | undefined;
 if (mode === undefined || !modes.includes(mode)) {
@@ -219,12 +219,91 @@ const ship = async (): Promise<void> => {
   console.log(`Previous release kept at ${NodePath.join(stage, "previous")}`);
 };
 
+const desktopDir = NodePath.join(repoRoot, "apps", "desktop");
+const desktopMain = NodePath.join(desktopDir, "dist-electron", "main.cjs");
+const stopDesktopApp = (): void => {
+  const found = NodeChildProcess.spawnSync("pgrep", ["-f", desktopMain], {
+    encoding: "utf8",
+  }).stdout.trim();
+  for (const pid of found === "" ? [] : found.split("\n").map(Number)) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Already gone.
+    }
+  }
+};
+
+// The built desktop app is the production flavor (T3 Code (Beta), t3code://) on this profile, so it
+// holds the same threads, settings and ports as the dev runner. The dev flavor exists only behind
+// Vite (`pnpm dev:desktop`).
+const desktop = async (): Promise<void> => {
+  if (!NodeFS.existsSync(desktopMain)) {
+    throw new Error("No desktop build. Run `node scripts/pi-code.ts desktop:build` first.");
+  }
+  await waitForIdle();
+  await stopDevRunner();
+  stopDesktopApp();
+  await stopPort(webPort);
+  await stopPort(serverPort);
+  const env = {
+    ...profileEnv(),
+    T3CODE_PORT: String(serverPort),
+    T3CODE_HOME: profileDir,
+  };
+  const bundle = NodePath.resolve(desktopDir, ".electron-runtime", "T3 Code (Beta).app");
+  if (!NodeFS.existsSync(bundle)) {
+    // The launcher builds the runtime bundle; a non-dev environment selects the production flavor.
+    NodeChildProcess.execFileSync(
+      node,
+      [
+        "-e",
+        `import(${JSON.stringify(NodePath.join(desktopDir, "scripts", "electron-launcher.mjs"))}).then((m) => m.resolveElectronLaunchCommand([desktopMain]))`,
+      ],
+      { cwd: desktopDir, env, stdio: "inherit" },
+    );
+  }
+  // open(1) detaches the app from this shell, so it outlives the command that started it.
+  NodeChildProcess.execFileSync(
+    "open",
+    [
+      "-n",
+      "-a",
+      bundle,
+      "--env",
+      `T3CODE_PORT=${env.T3CODE_PORT}`,
+      "--env",
+      `T3CODE_HOME=${env.T3CODE_HOME}`,
+      "--args",
+      desktopMain,
+    ],
+    { stdio: "inherit" },
+  );
+  for (let i = 0; i < 150 && portOwner(serverPort) === undefined; i++)
+    await NodeTimersPromises.setTimeout(200);
+  if (portOwner(serverPort) === undefined)
+    throw new Error("The desktop app did not start its backend.");
+  console.log(`Pi Code desktop is running with profile ${profileDir} (API on ${serverPort})`);
+};
+
 const actions: Record<Mode, () => Promise<void>> = {
+  desktop,
+  "desktop:build": async () => {
+    NodeChildProcess.execFileSync(
+      vp,
+      ["run", "--filter", "@t3tools/desktop", "--filter", "t3", "build"],
+      {
+        cwd: repoRoot,
+        stdio: "inherit",
+      },
+    );
+  },
   dev,
   start,
   ship,
   stop: async () => {
     await stopDevRunner();
+    stopDesktopApp();
     await stopPort(webPort);
     await stopPort(serverPort);
   },
