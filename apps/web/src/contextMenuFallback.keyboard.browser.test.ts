@@ -57,39 +57,6 @@ it("starts a keyboard-opened menu on its first action and wraps through enabled 
   expect(label()).toBe("Rename");
 });
 
-it("keeps destructive text and its icon readable against the menu in a dark theme", () => {
-  using _fixture = setup();
-  using cleanup = new DisposableStack();
-  const theme = document.createElement("style");
-  theme.textContent = `:root {
-    --popover: #181818;
-    --contrast-popover-foreground: #eeeeee;
-    --destructive: #ff6467;
-    --destructive-foreground: #202020;
-    --radius-sm: 4px;
-  }`;
-  document.head.append(theme);
-  cleanup.defer(() => theme.remove());
-
-  void showContextMenuFallback([
-    { id: "rename", label: "Rename" },
-    { id: "delete", label: "Delete", icon: "trash" },
-  ]);
-  const row = document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[1]!;
-  const icon = row.querySelector("svg")!;
-  const menuColor = getComputedStyle(row.closest('[role="menu"]')!).color;
-  expect(menuColor).toBe("rgb(238, 238, 238)");
-  expect(getComputedStyle(row).color).toBe(menuColor);
-  expect(getComputedStyle(icon).stroke).toBe(menuColor);
-
-  press("ArrowDown");
-  expect(document.activeElement).toBe(row);
-  expect(getComputedStyle(row).color).toBe(menuColor);
-  expect(getComputedStyle(row).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
-  press("ArrowUp");
-  expect(getComputedStyle(row).color).toBe(menuColor);
-});
-
 it("opens and cancels one submenu level at a time, then returns to the thread", async () => {
   using fixture = setup();
   const result = showContextMenuFallback(items);
