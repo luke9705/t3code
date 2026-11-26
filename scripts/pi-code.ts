@@ -24,7 +24,16 @@ const origin = `http://${host}:${webPort}`;
 const node = NodeChildProcess.execSync("command -v node", { encoding: "utf8" }).trim();
 const vp = NodePath.join(repoRoot, "node_modules", ".bin", "vp");
 
-const modes = ["desktop", "desktop:build", "dev", "start", "ship", "stop", "status"] as const;
+const modes = [
+  "desktop",
+  "desktop:build",
+  "desktop:dev",
+  "dev",
+  "start",
+  "ship",
+  "stop",
+  "status",
+] as const;
 type Mode = (typeof modes)[number];
 const mode = process.argv[2] as Mode | undefined;
 if (mode === undefined || !modes.includes(mode)) {
@@ -136,16 +145,17 @@ const status = () => {
   console.log(`api ${serverPort}: ${api ?? "-"} ${command(api)}`);
 };
 
-const dev = async (): Promise<void> => {
+const dev = async (runnerMode: "dev" | "dev:desktop" = "dev"): Promise<void> => {
   await waitForIdle();
   await stopDevRunner();
+  stopDesktopApp();
   await stopPort(webPort);
   await stopPort(serverPort);
   const child = NodeChildProcess.spawn(
     node,
     [
       NodePath.join(repoRoot, "scripts", "dev-runner.ts"),
-      "dev",
+      runnerMode,
       "--home-dir",
       profileDir,
       "--host",
@@ -288,6 +298,8 @@ const desktop = async (): Promise<void> => {
 
 const actions: Record<Mode, () => Promise<void>> = {
   desktop,
+  // The desktop app with Vite hot reload, on the same profile; foreground like `dev`.
+  "desktop:dev": () => dev("dev:desktop"),
   "desktop:build": async () => {
     NodeChildProcess.execFileSync(
       vp,
