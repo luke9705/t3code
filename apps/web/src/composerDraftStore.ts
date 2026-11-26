@@ -4805,12 +4805,6 @@ export function useComposerDraftModelState(
 // Mode-only promotion opens a thread without launching model work.
 const quietDraftPromotions = new Set<string>();
 
-function setQuietDraftPromotion(threadRef: ScopedThreadRef, quiet: boolean): void {
-  const key = scopedThreadKey(threadRef);
-  if (quiet) quietDraftPromotions.add(key);
-  else quietDraftPromotions.delete(key);
-}
-
 /** Threads a sent draft is launching into: from their shell's arrival until the server owns the send. */
 export function usePromotingDraftThreadKeys(): ReadonlyArray<string> {
   return useComposerDraftStore(
@@ -4870,7 +4864,6 @@ export function finalizePromotedDraftThreadByRef(threadRef: ScopedThreadRef): vo
     }
   }
   clearBackgroundDraftSubmissionByRef(threadRef);
-  setQuietDraftPromotion(threadRef, false);
 }
 
 type DraftPromotionShell = Pick<EnvironmentThreadShell, "latestRun" | "latestUserMessageAt">;
