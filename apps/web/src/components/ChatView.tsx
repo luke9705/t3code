@@ -2736,6 +2736,21 @@ export default function ChatView(props: ChatViewProps) {
     messages,
   );
   const extensionStatuses = deriveProviderExtensionStatuses(serverProjection);
+  const piGoalStatus =
+    selectedProvider === "pi"
+      ? extensionStatuses.find(
+          ({ key, text }) =>
+            key === "pi-goal" && (text === "Goal in progress" || text === "Goal paused"),
+        )
+      : undefined;
+  const piTrackingStatus =
+    selectedProvider === "pi"
+      ? extensionStatuses.find(
+          ({ key, text }) =>
+            key === "goal-tracker" &&
+            (text === "Tracking in progress" || text === "Tracking paused"),
+        )
+      : undefined;
   const piModeText =
     selectedProvider === "pi"
       ? extensionStatuses.find(({ key }) => key === "plan-mode")?.text
@@ -2811,10 +2826,12 @@ export default function ChatView(props: ChatViewProps) {
         : [];
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const visibleStatuses = extensionStatuses.filter(
-      ({ key }) =>
-        key !== PI_FOOTER_METRICS_STATUS &&
-        key !== PI_CONTEXT_COMPOSITION_STATUS &&
-        key !== "plan-mode",
+      (status) =>
+        status.key !== PI_FOOTER_METRICS_STATUS &&
+        status.key !== PI_CONTEXT_COMPOSITION_STATUS &&
+        status.key !== "plan-mode" &&
+        status !== piGoalStatus &&
+        status !== piTrackingStatus,
     );
     if (nativePiStatus && (nativePiStatus.shells > 0 || nativePiStatus.subagents > 0)) {
       const { shells, subagents } = nativePiStatus;
@@ -3957,6 +3974,20 @@ export default function ChatView(props: ChatViewProps) {
                                 onHeldRequestIdsChange={onHeldRequestIdsChange}
                                 pendingUserInputs={pendingUserInputs}
                                 {...(piMode === undefined ? {} : { piMode })}
+                                piGoalState={
+                                  piGoalStatus === undefined
+                                    ? null
+                                    : piGoalStatus.text === "Goal paused"
+                                      ? "paused"
+                                      : "active"
+                                }
+                                piTrackingState={
+                                  piTrackingStatus === undefined
+                                    ? null
+                                    : piTrackingStatus.text === "Tracking paused"
+                                      ? "paused"
+                                      : "active"
+                                }
                                 {...(canOperateThread &&
                                 selectedProvider === "pi" &&
                                 (activeProviderThread == null || piMode !== undefined) &&

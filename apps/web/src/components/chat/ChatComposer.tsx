@@ -420,6 +420,8 @@ export interface ChatComposerProps {
   onHeldRequestIdsChange: (requestIds: ReadonlySet<string>) => void;
   pendingUserInputs: PendingUserInput[];
   piMode?: "build" | "plan";
+  piGoalState?: "active" | "paused" | null;
+  piTrackingState?: "active" | "paused" | null;
   onTogglePiMode?: (command: "/plan on" | "/plan off") => void;
   activePendingIsResponding: boolean;
   respondingRequestIds: RuntimeRequestId[];
@@ -3658,6 +3660,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       />
     ) : null;
   const activePiMode = props.piMode;
+  const showPiStatuses =
+    !dictationTakesFooter && (props.piGoalState != null || props.piTrackingState != null);
   const piModeControl =
     activePiMode !== undefined &&
     props.onTogglePiMode &&
@@ -4095,15 +4099,32 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               <div
                 data-chat-composer-footer="true"
                 className={cn(
-                  "flex min-w-0 flex-nowrap items-center overflow-visible px-2 pb-2",
+                  "flex min-w-0 items-center overflow-visible px-2 pb-2",
+                  showPiStatuses ? "flex-wrap gap-y-1" : "flex-nowrap",
                   pendingUserInputs.length > 0 && "pt-2",
                   showMobilePendingAnswerActions &&
                     speechInput.state.phase === "idle" &&
                     "hidden sm:flex",
                 )}
               >
-                {piModeControl && !dictationTakesFooter ? (
-                  <div className="me-2">{piModeControl}</div>
+                {(piModeControl && !dictationTakesFooter) || showPiStatuses ? (
+                  <div className="me-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    {piModeControl}
+                    {showPiStatuses && props.piGoalState != null ? (
+                      <span className="text-xs text-muted-foreground">
+                        {props.piGoalState === "active"
+                          ? gt("Goal in progress")
+                          : gt("Goal paused")}
+                      </span>
+                    ) : null}
+                    {showPiStatuses && props.piTrackingState != null ? (
+                      <span className="text-xs text-muted-foreground">
+                        {props.piTrackingState === "active"
+                          ? gt("Tracking in progress")
+                          : gt("Tracking paused")}
+                      </span>
+                    ) : null}
+                  </div>
                 ) : null}
                 <div
                   data-chat-composer-actions="right"
@@ -4111,7 +4132,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   data-chat-composer-primary-actions-compact={
                     isComposerPrimaryActionsCompact ? "true" : "false"
                   }
-                  className="flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-2"
+                  className={cn(
+                    "flex min-w-0 flex-nowrap items-center justify-end gap-2",
+                    showPiStatuses ? "flex-auto basis-64" : "flex-1",
+                  )}
                 >
                   <div
                     ref={attachExpandedComposerControls}
