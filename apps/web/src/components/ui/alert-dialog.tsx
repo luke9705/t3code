@@ -23,6 +23,7 @@ function AlertDialog<Payload>(props: AlertDialogPrimitive.Root.Props<Payload>) {
 }
 
 const AlertDialogPortal = AlertDialogPrimitive.Portal;
+const AlertDialogTrigger = AlertDialogPrimitive.Trigger;
 
 function AlertDialogBackdrop({ className, ...props }: AlertDialogPrimitive.Backdrop.Props) {
   return (
@@ -150,6 +151,7 @@ function AlertDialogClose(props: AlertDialogPrimitive.Close.Props) {
 
 export {
   AlertDialog,
+  AlertDialogTrigger,
   AlertDialogPortal,
   AlertDialogBackdrop,
   AlertDialogBackdrop as AlertDialogOverlay,

@@ -191,6 +191,17 @@ Provider updates do not restart running chats. An existing session can keep
 using the previous CLI until it ends. If discovery fails, check the provider
 status and refresh it again.
 
+## Pi Code updates
+
+Click the circular update icon at the bottom of the sidebar to see what is
+available. A yellow dot marks a **Pi CLI** update; a theme-colored dot marks a
+new stable **T3 upstream** release. The icon shows both dots when both are available.
+
+Updating Pi CLI does not restart existing sessions. If Pi Code cannot update
+the installation directly, the dialog links to provider settings. **Open
+review chat** starts a new chat with an editable draft asking what is worth
+porting from upstream. It does not send the prompt or install the upstream app.
+
 ## Mobile updates
 
 To update an environment from your phone, open **Settings → Environments** and

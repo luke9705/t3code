@@ -12741,5 +12741,16 @@
   "99d51127f573296b": "Otra cuenta",
   "8ec2c57414669b79": "Conecta un segundo espacio de trabajo o usuario de {tracker}.",
   "99963c0142e17f00": "Para la nueva cuenta de {tracker}.",
-  "6d8e4ebc889bace9": "Añadir cuenta"
+  "6d8e4ebc889bace9": "Añadir cuenta",
+  "6f062072213d3b46": "Connect to the Pi Code environment first.",
+  "2b620f52d8d902f7": "Could not open the upstream review",
+  "7b3a5c5948fc9952": "Updates available",
+  "8a929a1565442e7b": "{provider} {version} available",
+  "8a30994baa079bb1": "Update {provider}",
+  "26def06e031e1324": "Upstream T3 Code {version} is available",
+  "ccccadfca3df0574": "Pi Code is based on {version}. Open an unsent draft to review what to port.",
+  "015de84c891c519c": "Updates available",
+  "44d00c1b059975d9": "Choose which update to act on.",
+  "5be623b38746bc39": "New sessions will use the updated CLI.",
+  "d5865bb89e6ff978": "Open review chat"
 }

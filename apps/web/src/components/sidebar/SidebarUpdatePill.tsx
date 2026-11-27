@@ -40,6 +40,7 @@ import {
   shouldContinueDesktopUpdateCheckAnimation,
   shouldShowDesktopUpdateCheckIcon,
 } from "./DesktopUpdateStatusIcon";
+import { SidebarPiCodeUpdates } from "./SidebarPiCodeUpdates";
 import { SidebarUpdateReleaseNotes } from "./SidebarUpdateReleaseNotes";
 import { SidebarUpdateCapsule } from "./SidebarUpdateCapsule";
 import { UpdateEverythingDialog } from "./UpdateEverythingDialog";
@@ -197,11 +198,11 @@ export async function installLocalUpdate(
   }
 }
 
-export function SidebarUpdatePill() {
-  return <SidebarUpdateControl />;
-}
-
-function SidebarUpdateControl() {
+export function SidebarUpdatePill({
+  piCodeUpdates,
+}: {
+  readonly piCodeUpdates?: ComponentProps<typeof SidebarPiCodeUpdates>["updates"];
+}) {
   const state = useDesktopUpdateState();
   const gt = useGT();
   const messages = useMessages();
@@ -410,7 +411,15 @@ function SidebarUpdateControl() {
     );
   };
 
-  if (!isElectron && !runsEverything && !isRunningEverything) return null;
+  const hasPiCodeUpdates = piCodeUpdates?.cli || piCodeUpdates?.upstream;
+  if (
+    !hasPiCodeUpdates &&
+    (!isElectron || !state?.enabled) &&
+    !runsEverything &&
+    !isRunningEverything
+  ) {
+    return null;
+  }
 
   const statusIcon = (
     <DesktopUpdateStatusIcon
@@ -466,6 +475,20 @@ function SidebarUpdateControl() {
         />
         {confirmDialog}
       </SidebarMenuItem>
+    );
+  }
+
+  if (hasPiCodeUpdates && piCodeUpdates) {
+    return (
+      <>
+        <SidebarPiCodeUpdates
+          updates={piCodeUpdates}
+          {...(!isInteractionDisabled && (runsEverything || showUpdateDetails)
+            ? { otherUpdate: { label: tooltip, run: () => void handleAction() } }
+            : {})}
+        />
+        {confirmDialog}
+      </>
     );
   }
 

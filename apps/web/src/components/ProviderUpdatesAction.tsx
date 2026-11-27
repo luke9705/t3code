@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { m } from "../i18n/messages";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { AuthProvidersManageScope, PROVIDER_DISPLAY_NAMES } from "@t3tools/contracts";
@@ -10,6 +11,7 @@ import { useRef, useState } from "react";
 import { T, useGT } from "gt-react";
 
 import { useEnvironmentProviders, useEnvironments } from "~/state/environments";
+import { localEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentsWithScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -71,8 +73,9 @@ export function useCheckProviderUpdates() {
   };
 }
 
-export function useProviderUpdates() {
+export function useProviderUpdates({ excludeLocalPi = false } = {}) {
   const { environments } = useEnvironments();
+  const localEnvironmentId = useAtomValue(localEnvironmentIdAtom);
   const manageableIds = useEnvironmentsWithScope(environments, AuthProvidersManageScope);
   const providersByEnvironment = useEnvironmentProviders();
   const updateProvider = useAtomCommand(serverEnvironment.updateProvider, {
@@ -86,8 +89,13 @@ export function useProviderUpdates() {
     ) {
       return [];
     }
-    const candidates = collectProviderUpdateCandidates(providers).filter((candidate) =>
-      canOneClickUpdateProviderCandidate(candidate, providers),
+    const candidates = collectProviderUpdateCandidates(providers).filter(
+      (candidate) =>
+        !(
+          excludeLocalPi &&
+          environment.environmentId === localEnvironmentId &&
+          candidate.driver === "pi"
+        ) && canOneClickUpdateProviderCandidate(candidate, providers),
     );
     return candidates.length > 0
       ? [{ environmentId: environment.environmentId, label: environment.label, candidates }]
