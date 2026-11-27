@@ -1480,7 +1480,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const showBeforeNavigation =
       !isMobile && rowKey !== routeRowKey && document.visibilityState === "visible";
     setPendingRow(showBeforeNavigation ? intent : null);
-    try {
+    const navigateAfterHighlight = async () => {
       if (showBeforeNavigation) {
         const source = router.history.location.href;
         // Give the pending highlight a paint before the new chat can do layout work.
@@ -1490,12 +1490,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         if (pendingRowRef.current !== intent || router.history.location.href !== source) return;
       }
       await navigate();
-    } finally {
+    };
+    await navigateAfterHighlight().finally(() => {
       if (pendingRowRef.current === intent) {
         pendingRowRef.current = null;
         setPendingRow(null);
       }
-    }
+    });
   };
 
   const navigateToThread = (threadRef: ScopedThreadRef) => {
