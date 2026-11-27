@@ -45,7 +45,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
-import { IsoDateTime, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { IsoDateTime, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { SecretSourceCheckResult } from "./settingsSecretValue.ts";
 import { SecretReference } from "./secretReference.ts";
 import {
@@ -511,6 +511,7 @@ export const WS_METHODS = {
   mcpAppsReadResource: "mcpApps.readResource",
   mcpAppsUpdateModelContext: "mcpApps.updateModelContext",
 
+  providerPiBackground: "provider.pi.background",
   providerMcpSignInStart: "provider.mcpSignIn.start",
   providerMcpSignInComplete: "provider.mcpSignIn.complete",
   providerAuthStart: "provider.auth.start",
@@ -1773,6 +1774,23 @@ const WsMcpAppsReadResourceRpc = Rpc.make(WS_METHODS.mcpAppsReadResource, {
   error: Schema.Union([McpAppRequestError, EnvironmentAuthorizationError]),
 });
 
+export class PiBackgroundWorkError extends Schema.TaggedError<
+  PiBackgroundWorkError,
+  { readonly brand: unique symbol }
+>()("PiBackgroundWorkError", {
+  cause: Schema.Defect(),
+}) {
+  override get message(): string {
+    return "Could not move Pi work to the background.";
+  }
+}
+
+const WsProviderPiBackgroundRpc = Rpc.make(WS_METHODS.providerPiBackground, {
+  payload: Schema.Struct({ threadId: ThreadId }),
+  success: Schema.Void,
+  error: Schema.Union([PiBackgroundWorkError, EnvironmentAuthorizationError]),
+});
+
 const WsProviderMcpSignInStartRpc = Rpc.make(WS_METHODS.providerMcpSignInStart, {
   payload: ProviderMcpSignInStartInput,
   success: ProviderMcpSignInStartResult,
@@ -2607,6 +2625,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsMcpAppsToolInfoRpc,
   WsMcpAppsReadResourceRpc,
   WsMcpAppsUpdateModelContextRpc,
+  WsProviderPiBackgroundRpc,
   WsProviderMcpSignInStartRpc,
   WsProviderMcpSignInCompleteRpc,
   WsSubscribeVcsStatusRpc,

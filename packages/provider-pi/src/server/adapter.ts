@@ -3491,6 +3491,26 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             !isLiveSessionOf(state, providerThread.nativeThreadRef?.nativeId)
           )
             return;
+          if (command === "/background") {
+            const canBackground = () =>
+              Boolean(
+                state.activeTurn &&
+                sessionEntity.extensionStatuses?.some(({ key }) => key === "background-shortcut"),
+              );
+            if (!canBackground()) return;
+            const commands = recordField(yield* request({ type: "get_commands" }), "commands");
+            // Without the Lean extension command, Pi would interpret /background as prompt text.
+            if (
+              !Array.isArray(commands) ||
+              !commands.some(
+                (entry) =>
+                  recordString(entry, "name") === "background" &&
+                  recordString(entry, "source") === "extension",
+              )
+            )
+              return yield* protocolError("The current Pi session does not expose /background.");
+            if (threadState !== state || !canBackground()) return;
+          }
           // Pi handles an extension command on receipt: no run starts, so this is safe mid-turn.
           // Any other disposition would mean a user turn was created, which the caller must learn about.
           const result = yield* request({ type: "prompt", message: command }).pipe(

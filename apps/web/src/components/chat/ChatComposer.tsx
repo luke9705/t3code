@@ -423,6 +423,7 @@ export interface ChatComposerProps {
   piGoalState?: "active" | "paused" | null;
   piTrackingState?: "active" | "paused" | null;
   onTogglePiMode?: (command: "/plan on" | "/plan off") => void;
+  onBackgroundPiWork?: () => Promise<void>;
   activePendingIsResponding: boolean;
   respondingRequestIds: RuntimeRequestId[];
 
@@ -2572,6 +2573,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       : null;
 
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem?: boolean) => {
+    if (
+      props.onBackgroundPiWork &&
+      event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      !event.isComposing &&
+      (key.toLowerCase() === "b" || event.code === "KeyB")
+    ) {
+      if (!event.repeat) void props.onBackgroundPiWork();
+      return true;
+    }
     if (
       key === "Tab" &&
       event.shiftKey &&

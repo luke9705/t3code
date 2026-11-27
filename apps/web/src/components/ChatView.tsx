@@ -2736,6 +2736,25 @@ export default function ChatView(props: ChatViewProps) {
     messages,
   );
   const extensionStatuses = deriveProviderExtensionStatuses(serverProjection);
+  const canBackgroundPiWork =
+    canOperateThread &&
+    isServerThread &&
+    selectedProvider === "pi" &&
+    extensionStatuses.some(({ key }) => key === "background-shortcut");
+  const backgroundPiWork = useAtomCommand(threadEnvironment.backgroundPiWork, {
+    reportFailure: false,
+  });
+  const backgroundPiWorkStable = useStableCallback(async () => {
+    if (!canBackgroundPiWork || !activeThread) return;
+    const result = await backgroundPiWork({ environmentId, input: { threadId: activeThread.id } });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      setThreadError(
+        activeThread.id,
+        thrownErrorMessage(squashAtomCommandFailure(result), m) ??
+          gt("An unexpected error occurred."),
+      );
+    }
+  });
   const piGoalStatus =
     selectedProvider === "pi"
       ? extensionStatuses.find(
@@ -3996,6 +4015,9 @@ export default function ChatView(props: ChatViewProps) {
                                 activeThread &&
                                 activeProject
                                   ? { onTogglePiMode: togglePiModeStable }
+                                  : {})}
+                                {...(canBackgroundPiWork
+                                  ? { onBackgroundPiWork: backgroundPiWorkStable }
                                   : {})}
                                 activePendingIsResponding={activePendingIsResponding}
                                 respondingRequestIds={respondingRequestIds}

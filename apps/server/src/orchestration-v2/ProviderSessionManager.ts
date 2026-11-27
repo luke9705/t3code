@@ -16,6 +16,7 @@ import {
   type OrchestrationV2Subagent,
   ProviderInstanceId,
   ProviderSessionId,
+  PiBackgroundWorkError,
   type RunId,
   ThreadId,
   type OrchestrationV2TurnItem,
@@ -3688,5 +3689,21 @@ export const layerWithOptions = (
       } satisfies ProviderSessionManagerV2Shape);
     }),
   );
+
+export const backgroundPiWork = Effect.fn("ProviderSessionManager.backgroundPiWork")(
+  function* (threadId: ThreadId) {
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const manager = yield* ProviderSessionManagerV2;
+    const { providerThread, providerTurn } = yield* projections.getRunningTurnContext(threadId);
+    if (!providerThread?.providerSessionId || !providerTurn) return;
+    const runtime = yield* manager.get(providerThread.providerSessionId);
+    if (Option.isNone(runtime) || runtime.value.driver !== "pi") return;
+    yield* (
+      runtime.value.applyExtensionCommand?.({ providerThread, command: "/background" }) ??
+        Effect.void
+    );
+  },
+  Effect.mapError((cause) => new PiBackgroundWorkError({ cause })),
+);
 
 export const layer = layerWithOptions();

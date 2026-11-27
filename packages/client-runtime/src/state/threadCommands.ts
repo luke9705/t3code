@@ -467,6 +467,10 @@ export function createThreadEnvironmentAtoms<R, E>(
           `history:${JSON.stringify([environmentId, input.threadId])}`,
       },
     }),
+    backgroundPiWork: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:commands:thread:pi-background",
+      tag: WS_METHODS.providerPiBackground,
+    }),
     // Outside the thread's queue: finishing can wait on the agent, and messages must not.
     mcpSignInStart: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:commands:thread:mcp-sign-in-start",

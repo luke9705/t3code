@@ -44,7 +44,20 @@ export function extensionStatusBannerItem(
     id: "pi-extension-status",
     variant: "default",
     icon: <span>▸</span>,
-    title: <output>{statuses.map((status) => status.text).join(" · ")}</output>,
+    title: (
+      <output>
+        {statuses.map(({ key, text }, index) => (
+          <Fragment key={key}>
+            {index > 0 ? " · " : null}
+            {key === "background-shortcut" ? (
+              <span className="text-muted-foreground">{text}</span>
+            ) : (
+              text
+            )}
+          </Fragment>
+        ))}
+      </output>
+    ),
   };
 }
 

@@ -2206,6 +2206,8 @@ export const layerWsRpc = (
           ),
         [ORCHESTRATION_V2_WS_METHODS.subscribePromptSuggestion]: (input) =>
           providerSessionManager.subscribePromptSuggestion(input.threadId),
+        [WS_METHODS.providerPiBackground]: ({ threadId }) =>
+          ProviderSessionManager.backgroundPiWork(threadId),
         [WS_METHODS.workflowsSubscribe]: (_input) => workflows.watch,
         [WS_METHODS.workflowsCounts]: (_input) => workflows.counts,
         [WS_METHODS.workflowsGet]: (input) =>
