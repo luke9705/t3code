@@ -206,6 +206,9 @@ export class PullRequestService extends Context.Service<
         readonly bypassCache?: boolean;
       },
     ) => Effect.Effect<PullRequestSummary, PullRequestError>;
+    readonly readGitHubCreationTime: (
+      input: Pick<PullRequestRef, "projectId" | "repository" | "number">,
+    ) => Effect.Effect<string | null>;
     /** Whether the reference's host batches summary reads; false when it cannot be resolved. */
     readonly batchesReads: (input: PullRequestRef) => Effect.Effect<boolean>;
     readonly stack: (
@@ -602,6 +605,14 @@ function withRateLimitBackoff(
       ? {}
       : {
           getChangeRequestSummary: wrap("getChangeRequestSummary", api.getChangeRequestSummary),
+        }),
+    ...(api.getChangeRequestCreatedAt === undefined
+      ? {}
+      : {
+          getChangeRequestCreatedAt: wrap(
+            "getChangeRequestCreatedAt",
+            api.getChangeRequestCreatedAt,
+          ),
         }),
     ...(api.getChangeRequestStack === undefined
       ? {}
@@ -4275,6 +4286,22 @@ export const make = Effect.gen(function* () {
       return yield* listStats({ ...input, refs: refs.flatMap(Option.toArray) });
     }),
     summary: credentialCached(summary),
+    readGitHubCreationTime: Effect.fn("PullRequestService.readGitHubCreationTime")(
+      function* (input) {
+        const host = "github.com";
+        const api = registry.get(SourceControlProviderKind.make("github"));
+        if (api === null) return null;
+        const read = withRateLimitBackoff(api, host, rateLimits).getChangeRequestCreatedAt;
+        if (read === undefined) return null;
+        const project = yield* projects
+          .getShell(input.projectId)
+          .pipe(Effect.orElseSucceed(Option.none));
+        if (Option.isNone(project)) return null;
+        return yield* read({ ...input, host, cwd: project.value.workspaceRoot }).pipe(
+          Effect.orElseSucceed(() => null),
+        );
+      },
+    ),
     batchesReads,
     stack: credentialCached(stack),
     subscribeMerges: PubSub.subscribe(mergedPullRequests).pipe(

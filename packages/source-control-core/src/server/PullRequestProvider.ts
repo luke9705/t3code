@@ -466,6 +466,10 @@ export interface PullRequestProviderApi {
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderChangeRequestSummary, PullRequestProviderError>;
 
+  readonly getChangeRequestCreatedAt?: (
+    input: ProviderRepositoryRef & { readonly number: number },
+  ) => Effect.Effect<string, PullRequestProviderError>;
+
   /** Null means unknown; an absent method requires full watch reads. */
   readonly getChangeRequestWatchFingerprint?: (
     input: ProviderRepositoryRef & { readonly number: number },

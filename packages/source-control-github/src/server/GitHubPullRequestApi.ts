@@ -566,6 +566,12 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly host: string;
       readonly number: number;
     }) => Effect.Effect<ProviderChangeRequestSummary, GitHubPullRequestApiError>;
+    readonly getPullRequestCreatedAt: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+    }) => Effect.Effect<string, GitHubPullRequestApiError>;
     /** Null triggers a full watch read when GitHub gives no answer. */
     readonly getPullRequestWatchFingerprint: (input: {
       readonly cwd: string;
@@ -910,6 +916,10 @@ interface LocatedCheckJob {
   readonly runId: number | null;
   readonly detail: string | null;
 }
+
+const decodePullRequestCreatedAt = Schema.decodeUnknownResult(
+  Schema.fromJsonString(Schema.Struct({ created_at: Schema.String })),
+);
 
 function parseRepositorySelector(value: string): {
   readonly owner: string;
@@ -2194,6 +2204,22 @@ export const make = Effect.gen(function* () {
     ),
 
     getPullRequestSummary,
+    getPullRequestCreatedAt: Effect.fn("GitHubPullRequestApi.getPullRequestCreatedAt")(
+      function* (input) {
+        const operation = "getPullRequestCreatedAt";
+        const lookup = pullRequestLookup(input);
+        if (lookup === null)
+          return yield* new GitHubRepositorySelectorError({ cwd: input.cwd, operation });
+        const { owner, name, number } = lookup;
+        const result = yield* restRead({
+          ...input,
+          operation,
+          path: `repos/${owner}/${name}/pulls/${number}`,
+          decode: decodePullRequestCreatedAt,
+        });
+        return result.created_at;
+      },
+    ),
     getPullRequestWatchFingerprint,
     pullRequestEvents: yield* GitHubPullRequestEvents.make,
 

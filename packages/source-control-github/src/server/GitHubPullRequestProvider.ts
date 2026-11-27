@@ -491,6 +491,9 @@ export const make = Effect.gen(function* () {
         Effect.mapError(fail("getChangeRequestSummary")),
       ),
 
+    getChangeRequestCreatedAt: (input) =>
+      cli.getPullRequestCreatedAt(input).pipe(Effect.mapError(fail("getChangeRequestCreatedAt"))),
+
     getChangeRequestStack: (input) =>
       cli.getPullRequestStack(input).pipe(Effect.mapError(fail("getChangeRequestStack"))),
 

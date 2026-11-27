@@ -92,6 +92,7 @@ const COMMAND_SEPARATOR = /&&|\|\||[;|\n]/u;
 // Commands that print other change requests' URLs, so output beside them proves nothing.
 const LISTS_CHANGE_REQUESTS =
   /\b(?:gh\s+(?:pr\s+(?:list|status)|search\s+prs|api)|glab\s+(?:mr\s+list|api))\b/u;
+const GH_PR_LIST = new RegExp(`${COMMAND_START}gh\\s+pr\\s+list(?=$|[\\s;&|)])`, "u");
 const URL_LINE = /^[ \t]*(https?:\/\/\S+)[ \t]*$/gmu;
 
 /** The script a shell input runs, unwrapped from Codex's `sh -lc`. */
@@ -146,12 +147,10 @@ const isPushCommand = (input: string) => PUSH_COMMAND.test(shellCode(shellScript
 type CommandExecution = Extract<OrchestrationV2TurnItem, { readonly type: "command_execution" }>;
 
 /**
- * The change requests a shell command opened: URLs on lines of their own in the output of a
- * command that runs a host's create command. One the command also names, as `gh pr view 12`
- * does, existed before it ran. More URLs than create commands means something else printed
- * some, such as `gh pr list`, so none are taken.
+ * Candidates must be on lines of their own and not named by another command in the script.
+ * Beside `gh pr list`, only a single GitHub PR URL is eligible, and its creation time must be verified.
  */
-export function changeRequestsCreatedBy(input: string, output: string) {
+function changeRequestsCreatedBy(input: string, output: string) {
   if (!CREATE_COMMANDS.some(({ command }) => command.test(input))) return [];
   const script = shellScript(input);
   const code = shellCode(script);
@@ -161,24 +160,34 @@ export function changeRequestsCreatedBy(input: string, output: string) {
     .split(COMMAND_SEPARATOR)
     .filter((part) => createCommandCount(part) === 0)
     .join("\n");
-  if (LISTS_CHANGE_REQUESTS.test(otherCommands)) return [];
+  const verifyCreation = LISTS_CHANGE_REQUESTS.test(otherCommands);
+  if (verifyCreation && !GH_PR_LIST.test(otherCommands)) return [];
   const otherScript = shellSegments(script)
     .filter((segment) => createCommandCount(shellCode(segment)) === 0)
     .join("\n");
   const creators = new Set(
     CREATE_COMMANDS.filter(({ run }) => code.match(run) !== null).map(({ kind }) => kind),
   );
-  const created = new Map<string, ThreadPullRequestKey & { readonly url: string }>();
+  const created = new Map<
+    string,
+    ThreadPullRequestKey & { readonly url: string; readonly verifyCreation: boolean }
+  >();
+  let urlCount = 0;
   for (const [, url = ""] of output.matchAll(URL_LINE)) {
     const parsed = sourceControlDefinitions.parseChangeRequestUrl(url);
+    if (parsed === null) continue;
+    if (verifyCreation && ++urlCount > 1) return [];
     // Only the host whose create command ran can have printed a new change request.
-    if (parsed === null || !creators.has(parsed.definition.kind)) continue;
+    if (!creators.has(parsed.definition.kind)) continue;
     const { link } = parsed;
+    if (verifyCreation && (parsed.definition.kind !== "github" || link.host !== "github.com")) {
+      continue;
+    }
     const named = new RegExp(`(?:^|(?<=[\\s#/=("']))${link.number}(?=$|[\\s);&|/"'])`, "u");
     // Quoted text in the other commands counts, as in `printf '.../pull/12'`.
     if (named.test(otherScript)) continue;
     const key = normalizeThreadPullRequestKey(link);
-    created.set(threadPullRequestKeyOf(key), { ...key, url });
+    created.set(threadPullRequestKeyOf(key), { ...key, url, verifyCreation });
   }
   return created.size > creates ? [] : [...created.values()];
 }
@@ -766,9 +775,26 @@ export const make = Effect.gen(function* () {
       if (isOrchestrationV2WorkActive(item.status)) return;
       yield* Effect.forEach(
         changeRequestsCreatedBy(item.input, item.output ?? ""),
-        (created) =>
-          engine
-            .dispatch({
+        ({ verifyCreation, ...created }) =>
+          Effect.gen(function* () {
+            if (verifyCreation) {
+              // The follow-up list can fail after creation. Check the timestamps, not the exit code.
+              if (item.startedAt === null || item.completedAt === null) return;
+              const start = DateTime.toEpochMillis(item.startedAt);
+              const end = DateTime.toEpochMillis(item.completedAt);
+              if (end < start) return;
+              const thread = yield* projections.getThreadShell(threadId);
+              if (thread === null) return;
+              const createdAt = yield* pullRequests.readGitHubCreationTime({
+                projectId: thread.projectId,
+                repository: created.repository,
+                number: created.number,
+              });
+              const timestamp = Date.parse(createdAt ?? "");
+              // GitHub reports whole seconds, while the command records milliseconds.
+              if (!(timestamp >= Math.floor(start / 1_000) * 1_000 && timestamp <= end)) return;
+            }
+            yield* engine.dispatch({
               type: "thread.pull-request.link",
               // Stable per command, so a repeated settlement cannot relink one the user unlinked.
               commandId: CommandId.make(
@@ -777,12 +803,12 @@ export const make = Effect.gen(function* () {
               threadId,
               ...created,
               source: "created",
-            })
-            .pipe(
-              Effect.catchCause(
-                logSkipped("linking a pull request a command created failed", { threadId }),
-              ),
+            });
+          }).pipe(
+            Effect.catchCause(
+              logSkipped("linking a pull request a command created failed", { threadId }),
             ),
+          ),
         { discard: true },
       );
     },
