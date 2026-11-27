@@ -4379,6 +4379,8 @@
   "92347683e33e9f02": "An diesen Rechner weiterleiten, für jede App hier",
   "3c7763243445b28d": "Server stoppen",
   "991cc9fb37606c91": "(leere Antwort)",
+  "d02211a22ea92ceb": "{count, plural, one {{count} Änderung} other {{count} Änderungen}}",
+  "89fa8bd40b3ad6e8": "Änderung {number}",
   "36e4b8d2db087296": "Ab dieser Antwort forken",
   "c92a0bab54261695": "Auf diese Antwort antworten",
   "405a3e88ee6e62b3": "Die Änderungen dieser Runde in diesem Repository können nicht aufgelistet werden.",

@@ -4378,6 +4378,8 @@
   "92347683e33e9f02": "Forward to this machine, for any app here",
   "3c7763243445b28d": "Stop server",
   "991cc9fb37606c91": "(empty response)",
+  "d02211a22ea92ceb": "{count, plural, one {{count} edit} other {{count} edits}}",
+  "89fa8bd40b3ad6e8": "Edit {number}",
   "36e4b8d2db087296": "Fork from this response",
   "c92a0bab54261695": "Reply to this response",
   "405a3e88ee6e62b3": "This turn's changes in this repository cannot be listed.",

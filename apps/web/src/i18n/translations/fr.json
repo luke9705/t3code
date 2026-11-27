@@ -4377,6 +4377,8 @@
   "92347683e33e9f02": "Rediriger vers cette machine, pour toute app ici",
   "3c7763243445b28d": "Arrêter le serveur",
   "991cc9fb37606c91": "(réponse vide)",
+  "d02211a22ea92ceb": "{count, plural, one {{count} modification} other {{count} modifications}}",
+  "89fa8bd40b3ad6e8": "Modification {number}",
   "36e4b8d2db087296": "Créer un fork depuis cette réponse",
   "c92a0bab54261695": "Répondre à cette réponse",
   "405a3e88ee6e62b3": "Impossible de lister les modifications de ce tour dans ce dépôt.",

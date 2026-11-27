@@ -4376,6 +4376,8 @@
   "92347683e33e9f02": "Encaminhar para esta máquina, para qualquer app aqui",
   "3c7763243445b28d": "Parar servidor",
   "991cc9fb37606c91": "(resposta vazia)",
+  "d02211a22ea92ceb": "{count, plural, one {{count} edição} other {{count} edições}}",
+  "89fa8bd40b3ad6e8": "Edição {number}",
   "36e4b8d2db087296": "Criar fork a partir desta resposta",
   "c92a0bab54261695": "Responder a esta resposta",
   "405a3e88ee6e62b3": "Não é possível listar as alterações deste turno neste repositório.",

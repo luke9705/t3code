@@ -4376,6 +4376,8 @@
   "92347683e33e9f02": "Reenviar a este equipo, para cualquier app aquí",
   "3c7763243445b28d": "Detener servidor",
   "991cc9fb37606c91": "(respuesta vacía)",
+  "d02211a22ea92ceb": "{count, plural, one {{count} edición} other {{count} ediciones}}",
+  "89fa8bd40b3ad6e8": "Edición {number}",
   "36e4b8d2db087296": "Bifurcar desde esta respuesta",
   "c92a0bab54261695": "Responder a esta respuesta",
   "405a3e88ee6e62b3": "No se pueden listar los cambios de este turno en este repositorio.",

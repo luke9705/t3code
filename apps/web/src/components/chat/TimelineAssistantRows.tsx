@@ -130,11 +130,16 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
 }
 
 function RecordedPiChangedFiles({ edits }: { edits: ReadonlyArray<RecordedPiEdit> }) {
-  const { onOpenToolDiff } = use(TimelineRowCtx);
   const gt = useGT();
   const syncTimelineLayout = useSyncLayout();
   const [open, setOpen] = useState(false);
-  const count = new Set(edits.map(({ path }) => path)).size;
+  const byPath = new Map<string, RecordedPiEdit[]>();
+  for (const edit of edits) {
+    const fileEdits = byPath.get(edit.path);
+    if (fileEdits) fileEdits.push(edit);
+    else byPath.set(edit.path, [edit]);
+  }
+  const count = byPath.size;
   const collapsible = count > 5;
   const totals = edits.reduce(
     (total, edit) => ({
@@ -158,23 +163,8 @@ function RecordedPiChangedFiles({ edits }: { edits: ReadonlyArray<RecordedPiEdit
   const files =
     !collapsible || open ? (
       <div className="px-3 pb-2">
-        {edits.map((edit) => (
-          <div key={edit.itemId} className="flex min-w-0 items-center justify-between gap-2 py-1">
-            <span className="min-w-0 flex-1 break-all font-mono">{edit.path}</span>
-            {hasNonZeroStat(edit) ? (
-              <DiffStatLabel
-                additions={edit.additions}
-                deletions={edit.deletions}
-                layout="inline"
-                className="flex-row-reverse"
-              />
-            ) : null}
-            {onOpenToolDiff ? (
-              <Button size="xs" variant="outline" onClick={() => onOpenToolDiff(edit)}>
-                <T>Open diff</T>
-              </Button>
-            ) : null}
-          </div>
+        {Array.from(byPath, ([path, fileEdits]) => (
+          <RecordedPiFileRow key={path} path={path} edits={fileEdits} />
         ))}
       </div>
     ) : null;
@@ -210,6 +200,82 @@ function RecordedPiChangedFiles({ edits }: { edits: ReadonlyArray<RecordedPiEdit
         </>
       )}
     </div>
+  );
+}
+
+function RecordedPiFileRow({
+  path,
+  edits,
+}: {
+  path: string;
+  edits: ReadonlyArray<RecordedPiEdit>;
+}) {
+  const { onOpenToolDiff } = use(TimelineRowCtx);
+  const gt = useGT();
+  const syncTimelineLayout = useSyncLayout();
+  const totals = edits.reduce(
+    (total, edit) => ({
+      additions: total.additions + edit.additions,
+      deletions: total.deletions + edit.deletions,
+    }),
+    { additions: 0, deletions: 0 },
+  );
+  const name = <span className="min-w-0 flex-1 break-all font-mono">{path}</span>;
+  const stats = hasNonZeroStat(totals) ? (
+    <DiffStatLabel {...totals} layout="inline" className="shrink-0 flex-row-reverse" />
+  ) : null;
+  const openDiff = (edit: RecordedPiEdit) =>
+    onOpenToolDiff ? (
+      <Button size="xs" variant="outline" onClick={() => onOpenToolDiff(edit)}>
+        <T>Open diff</T>
+      </Button>
+    ) : null;
+  if (edits.length === 1) {
+    return (
+      <div className="flex min-w-0 items-center gap-2 py-1">
+        {name}
+        {stats}
+        {openDiff(edits[0]!)}
+      </div>
+    );
+  }
+  return (
+    <Collapsible onOpenChange={() => syncTimelineLayout()}>
+      <CollapsibleTrigger
+        className="group flex w-full min-w-0 items-center gap-2 rounded-md py-1.5 text-left hover:bg-accent/60"
+        data-scroll-anchor-ignore
+      >
+        {name}
+        <span className="shrink-0 text-muted-foreground">
+          {gt("{count, plural, one {{count} edit} other {{count} edits}}", { count: edits.length })}
+        </span>
+        {stats}
+        <ChevronDownIcon
+          aria-hidden
+          className="size-3.5 shrink-0 text-muted-foreground group-aria-expanded:rotate-180"
+        />
+      </CollapsibleTrigger>
+      <CollapsiblePanel animate={false}>
+        <ol className="ms-1.5 border-s border-border ps-3">
+          {edits.map((edit, index) => (
+            <li key={edit.itemId} className="flex min-w-0 items-center gap-2 py-1">
+              <span className="flex-1 text-muted-foreground">
+                {gt("Edit {number}", { number: index + 1 })}
+              </span>
+              {hasNonZeroStat(edit) ? (
+                <DiffStatLabel
+                  additions={edit.additions}
+                  deletions={edit.deletions}
+                  layout="inline"
+                  className="shrink-0 flex-row-reverse"
+                />
+              ) : null}
+              {openDiff(edit)}
+            </li>
+          ))}
+        </ol>
+      </CollapsiblePanel>
+    </Collapsible>
   );
 }
 
